@@ -61,6 +61,7 @@ export const config = {
 export const SETTING_KEYS = [
   'scanCron',
   'openrouter.model',
+  'openrouter.fallbackModels',
   'thresholds.minConfidence',
   'thresholds.minTopicScore',
   'notify.email.enabled',

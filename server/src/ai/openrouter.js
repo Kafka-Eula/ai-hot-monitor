@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { getSetting } from '../db.js';
 
 /**
  * OpenRouter 客户端（OpenAI 兼容 /chat/completions）。
@@ -17,9 +18,24 @@ const CIRCUIT_MS = 10 * 60000;
 const modelCooldown = new Map();
 const MODEL_COOL_MS = 12 * 60000;
 
+/** 主模型：设置页覆盖值优先，回退 .env */
+function effectiveModel() {
+  return String(getSetting('openrouter.model', '') || config.openrouter.model);
+}
+
+/** 备用链：设置页覆盖值优先（逗号分隔），回退 .env */
+function effectiveFallbacks() {
+  const raw = getSetting('openrouter.fallbackModels', '');
+  if (typeof raw === 'string' && raw.trim()) {
+    return raw.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  if (Array.isArray(raw) && raw.length) return raw;
+  return config.openrouter.fallbackModels || [];
+}
+
 /** 候选模型链：主模型 + 免费备胎（按序尝试） */
 export function modelChain() {
-  const chain = [config.openrouter.model, ...(config.openrouter.fallbackModels || [])];
+  const chain = [effectiveModel(), ...effectiveFallbacks()];
   return [...new Set(chain.filter(Boolean))];
 }
 
@@ -38,7 +54,7 @@ export function aiStatus() {
   const now = Date.now();
   return {
     has_key: Boolean(config.openrouter.apiKey),
-    model: config.openrouter.model,
+    model: effectiveModel(),
     chain: modelChain(),
     available: availableModels(),
     cooling: Object.fromEntries(
