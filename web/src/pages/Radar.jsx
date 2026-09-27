@@ -35,11 +35,15 @@ export default function Radar({ scanning, scanInfo, pollTick, onOpenTopic, showT
             <RadarScope items={items} scanning={scanning} sources={sources} />
           </div>
           <div className="radar-meta">
-            近 6 小时 · <b>{items.length}</b> 条信号 · {Object.keys(SOURCE_LABEL).length} 路信息源
+            近 6 小时 · <b>{items.length}</b> 条信号
             <br />
             {scanInfo?.nextRunAt
               ? `下次扫描 ${new Date(scanInfo.nextRunAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`
               : '调度待命'}
+          </div>
+          <div className="radar-legend">
+            <div><em>角度</em> = 信息源扇区 · <em>半径</em> = 时间（中心=最新，外圈=6小时前）</div>
+            <div><em>光点越亮/越大</em> = 越新 · 悬停看标题，点击开原文</div>
           </div>
         </div>
 
