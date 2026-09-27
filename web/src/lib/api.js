@@ -41,11 +41,17 @@ export const api = {
   notifyTest: (title, body) => fetch('/api/notify/test', opt({ title, body })).then(j),
 };
 
-export function subscribe(onNotice, onScan) {
-  const es = new EventSource('/api/events');
-  es.addEventListener('notice', (e) => onNotice?.(JSON.parse(e.data)));
-  es.addEventListener('scan', (e) => onScan?.(JSON.parse(e.data)));
-  return () => es.close();
+export function subscribe(onNotice, onScan, onStatus) {
+  let es;
+  const open = () => {
+    es = new EventSource('/api/events');
+    es.addEventListener('hello', () => onStatus?.('open'));
+    es.addEventListener('notice', (e) => onNotice?.(JSON.parse(e.data)));
+    es.addEventListener('scan', (e) => onScan?.(JSON.parse(e.data)));
+    es.onerror = () => onStatus?.(es.readyState === 0 ? 'retrying' : 'closed');
+  };
+  open();
+  return () => es?.close();
 }
 
 export async function enablePush() {

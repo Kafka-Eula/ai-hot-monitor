@@ -30,6 +30,7 @@ export default function App() {
   const [scanInfo, setScanInfo] = useState(null);
   const [topicModal, setTopicModal] = useState(null);
   const [pollTick, setPollTick] = useState(0);
+  const [sse, setSse] = useState('open');
   const toastTimer = useRef();
 
   const showToast = useCallback((msg) => {
@@ -52,9 +53,21 @@ export default function App() {
     api.notices().then(setNotices).catch(() => {});
   }, []);
 
+  // SSE 重连成功后对齐一次通知，避免断线期间漏掉的未读
+  const setNoticesFresh = useCallback(() => {
+    api.notices().then(setNotices).catch(() => {});
+  }, []);
+
   useEffect(() => {
     refreshNotices();
   }, [refreshNotices]);
+
+  // SSE 不可靠时（retrying/closed）每 30s 兜底拉取通知
+  useEffect(() => {
+    if (sse === 'open') return;
+    const t = setInterval(refreshNotices, 30000);
+    return () => clearInterval(t);
+  }, [sse, refreshNotices]);
 
   const refreshScan = useCallback(() => {
     api
@@ -68,9 +81,23 @@ export default function App() {
 
   useEffect(() => {
     refreshScan();
-    const t = setInterval(refreshScan, 60000);
+    const t = setInterval(() => {
+      api
+        .scanStatus()
+        .then((s) => {
+          setScanning(Boolean(s.running));
+          setScanInfo((prev) => {
+            // 兜底：SSE 丢失时靠轮询发现新扫描结束，同样触发页面数据刷新
+            const prevId = prev?.recent?.[0]?.id;
+            const curId = s.recent?.[0]?.id;
+            if (curId !== undefined && curId !== prevId) setPollTick((x) => x + 1);
+            return s;
+          });
+        })
+        .catch(() => {});
+    }, 60000);
     return () => clearInterval(t);
-  }, [refreshScan]);
+  }, []);
 
   useEffect(() => {
     const close = subscribe(
@@ -94,6 +121,11 @@ export default function App() {
             );
           } else showToast(`扫描异常：${ev.error || '未知错误'}`);
         }
+      },
+      (status) => {
+        setSse(status);
+        if (status === 'retrying') showToast('⚠ 实时连接断开，降级为轮询模式');
+        if (status === 'open') setNoticesFresh();
       }
     );
     return close;

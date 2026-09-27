@@ -46,15 +46,16 @@ export default function RadarScope({ items, scanning, sources }) {
       const H = cvs.height;
       const cx = W / 2;
       const cy = H / 2;
-      const R = Math.min(W, H) / 2 - 26 * dpr;
+      const R = Math.min(W, H) / 2 - 46 * dpr; // 预留边距：水平方向的来源标签不再被裁切
       const now = Date.now();
 
       ctx.clearRect(0, 0, W, H);
 
-      // 同心环 + 时间刻度（圆心=最新 → 外圈=6小时前）
+      // 同心环 + 时间刻度（圆心=最新 → 外圈=6小时前；沿右上方 45° 标注，避开水平来源标签）
       ctx.strokeStyle = 'rgba(34,52,79,0.85)';
       ctx.lineWidth = 1 * dpr;
       const timeLabels = ['1.5h', '3h', '4.5h', '6h前'];
+      const ta = -Math.PI / 4;
       for (let i = 1; i <= 4; i++) {
         ctx.beginPath();
         ctx.arc(cx, cy, (R * i) / 4, 0, Math.PI * 2);
@@ -62,8 +63,8 @@ export default function RadarScope({ items, scanning, sources }) {
         ctx.stroke();
         ctx.globalAlpha = 1;
         ctx.font = `${9 * dpr}px ui-monospace, Consolas, monospace`;
-        const lx = cx + (R * i) / 4 + 3 * dpr;
-        const ly = cy;
+        const lx = cx + Math.cos(ta) * ((R * i) / 4 + 4 * dpr);
+        const ly = cy + Math.sin(ta) * ((R * i) / 4 + 4 * dpr);
         const tw = ctx.measureText(timeLabels[i - 1]).width;
         ctx.fillStyle = 'rgba(4,6,12,0.82)'; // 暗色衬底防重叠
         ctx.fillRect(lx - 2 * dpr, ly - 6.5 * dpr, tw + 4 * dpr, 13 * dpr);
@@ -77,28 +78,19 @@ export default function RadarScope({ items, scanning, sources }) {
       ctx.textAlign = 'center';
       ctx.fillText('现在', cx, cy - 10 * dpr);
 
-      // 来源射线 + 中文标签（含条数）
+      // 来源射线（标签最后画，避免被光点遮挡）
       const list = sources.length ? sources : [];
       const n = Math.max(list.length, 1);
       const counts = {};
       for (const it of items) counts[it.source] = (counts[it.source] || 0) + 1;
-      ctx.font = `${10 * dpr}px ui-monospace, Consolas, monospace`;
       list.forEach((s, i) => {
         const a = (i / n) * Math.PI * 2 - Math.PI / 2;
         ctx.strokeStyle = 'rgba(22,35,58,0.9)';
+        ctx.lineWidth = 1 * dpr;
         ctx.beginPath();
         ctx.moveTo(cx, cy);
         ctx.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R);
         ctx.stroke();
-        const col = SRC_COLOR[s.source] || '#61748f';
-        ctx.fillStyle = col;
-        ctx.globalAlpha = 0.95;
-        const lx = cx + Math.cos(a) * (R + 14 * dpr);
-        const ly = cy + Math.sin(a) * (R + 14 * dpr);
-        ctx.textAlign = Math.cos(a) > 0.2 ? 'left' : Math.cos(a) < -0.2 ? 'right' : 'center';
-        ctx.textBaseline = Math.sin(a) > 0.5 ? 'top' : Math.sin(a) < -0.5 ? 'bottom' : 'middle';
-        ctx.fillText(`${SOURCE_LABEL[s.source] || s.source} ${counts[s.source] || 0}`, lx, ly);
-        ctx.globalAlpha = 1;
       });
 
       // 条目光点（半径=时间新旧，越靠中心越新）
@@ -113,19 +105,20 @@ export default function RadarScope({ items, scanning, sources }) {
         const jitter = ((hash(it.id) % 100) / 100 - 0.5) * ((Math.PI * 2) / n) * 0.72;
         const a = sector + jitter;
         const age = (now - t) / SPAN; // 0=最新 1=6小时前
-        const rr = R * 0.06 + age * R * 0.9;
+        const jr = ((hash(it.id + 7) % 100) / 100 - 0.5) * 0.1; // 径向抖动，减少中心堆积
+        const rr = R * (0.1 + Math.min(0.88, age + jr));
         const x = cx + Math.cos(a) * rr;
         const y = cy + Math.sin(a) * rr;
         const col = SRC_COLOR[it.source] || '#3ef2a5';
         const alpha = 0.28 + (1 - age) * 0.62;
         const rad = (1.6 + (1 - age) * 2.6) * dpr;
 
-        const g = ctx.createRadialGradient(x, y, 0, x, y, rad * 3.2);
-        g.addColorStop(0, hexA(col, alpha));
+        const g = ctx.createRadialGradient(x, y, 0, x, y, rad * 1.5);
+        g.addColorStop(0, hexA(col, alpha * 0.7));
         g.addColorStop(1, hexA(col, 0));
         ctx.fillStyle = g;
         ctx.beginPath();
-        ctx.arc(x, y, rad * 3.2, 0, Math.PI * 2);
+        ctx.arc(x, y, rad * 1.5, 0, Math.PI * 2);
         ctx.fill();
 
         ctx.fillStyle = hexA(col, Math.min(1, alpha + 0.25));
@@ -154,8 +147,8 @@ export default function RadarScope({ items, scanning, sources }) {
       const sg = ctx.createConicGradient
         ? (() => {
             const gr = ctx.createConicGradient(sa, cx, cy);
-            gr.addColorStop(0, hexA('#3ef2a5', 0.32));
-            gr.addColorStop(0.12, hexA('#3ef2a5', 0));
+            gr.addColorStop(0, hexA('#3ef2a5', 0.12));
+            gr.addColorStop(0.1, hexA('#3ef2a5', 0));
             gr.addColorStop(1, hexA('#3ef2a5', 0));
             return gr;
           })()
@@ -170,10 +163,10 @@ export default function RadarScope({ items, scanning, sources }) {
         ctx.restore();
       }
       const grad = ctx.createLinearGradient(cx, cy, cx + Math.cos(sa) * R, cy + Math.sin(sa) * R);
-      grad.addColorStop(0, hexA('#3ef2a5', 0.15));
-      grad.addColorStop(1, hexA('#3ef2a5', 0.85));
+      grad.addColorStop(0, hexA('#3ef2a5', 0.08));
+      grad.addColorStop(1, hexA('#3ef2a5', 0.4));
       ctx.strokeStyle = grad;
-      ctx.lineWidth = 1.6 * dpr;
+      ctx.lineWidth = 1.4 * dpr;
       ctx.beginPath();
       ctx.moveTo(cx, cy);
       ctx.lineTo(cx + Math.cos(sa) * R, cy + Math.sin(sa) * R);
@@ -188,6 +181,41 @@ export default function RadarScope({ items, scanning, sources }) {
       ctx.fill();
       ctx.shadowBlur = 0;
 
+      // 来源标签（最上层绘制，带衬底防遮挡）
+      ctx.font = `${10 * dpr}px ui-monospace, Consolas, "Microsoft YaHei", monospace`;
+      list.forEach((s, i) => {
+        const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+        const col = SRC_COLOR[s.source] || '#61748f';
+        const label = `${SOURCE_LABEL[s.source] || s.source} ${counts[s.source] || 0}`;
+        const horiz = Math.abs(Math.cos(a)) > 0.35;
+        const lr = horiz ? R - 12 * dpr : R + 14 * dpr; // 水平→圆内，竖直→圆外
+        const lx = cx + Math.cos(a) * lr;
+        const ly = cy + Math.sin(a) * lr;
+        ctx.textAlign = horiz ? (Math.cos(a) > 0 ? 'right' : 'left') : 'center';
+        ctx.textBaseline = Math.sin(a) > 0.5 ? 'top' : Math.sin(a) < -0.5 ? 'bottom' : 'middle';
+        const tw = ctx.measureText(label).width;
+        const bx = ctx.textAlign === 'right' ? lx - tw : ctx.textAlign === 'left' ? lx : lx - tw / 2;
+        const by = ctx.textBaseline === 'top' ? ly : ctx.textBaseline === 'bottom' ? ly - 14 * dpr : ly - 7 * dpr;
+        ctx.fillStyle = 'rgba(4,6,12,0.88)';
+        ctx.fillRect(bx - 3 * dpr, by, tw + 6 * dpr, 14 * dpr);
+        ctx.fillStyle = col;
+        ctx.fillText(label, lx, ly);
+      });
+
+      // 时间刻度文字（最上层，沿右上方 45°，带衬底）
+      ctx.font = `${9 * dpr}px ui-monospace, Consolas, monospace`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      for (let i = 1; i <= 4; i++) {
+        const lx = cx + Math.cos(ta) * ((R * i) / 4 + 4 * dpr);
+        const ly = cy + Math.sin(ta) * ((R * i) / 4 + 4 * dpr);
+        const tw = ctx.measureText(timeLabels[i - 1]).width;
+        ctx.fillStyle = 'rgba(4,6,12,0.85)';
+        ctx.fillRect(lx - 2 * dpr, ly - 6.5 * dpr, tw + 4 * dpr, 13 * dpr);
+        ctx.fillStyle = '#6b7f99';
+        ctx.fillText(timeLabels[i - 1], lx, ly);
+      }
+
       raf = requestAnimationFrame(draw);
     };
     draw();
@@ -195,7 +223,7 @@ export default function RadarScope({ items, scanning, sources }) {
     const findDot = (mx, my) => {
       const dots = dotsRef.current;
       let best = -1;
-      let bd = 12;
+      let bd = 16; // 命中半径 16px，更易悬停
       for (let i = 0; i < dots.length; i++) {
         const d = Math.hypot(dots[i].x - mx, dots[i].y - my);
         if (d < bd) {
