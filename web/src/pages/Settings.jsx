@@ -9,6 +9,14 @@ const CRON_PRESETS = [
   ['0 9 * * *', '每天 9 点'],
 ];
 
+/** 实测推荐（免费链里速度快、JSON 稳定的） */
+const RECOMMENDED = [
+  'nvidia/nemotron-3-super-120b-a12b:free',
+  'poolside/laguna-s-2.1:free',
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+  'qwen/qwen3.8-27b:free',
+];
+
 export default function Settings({ refreshScan, showToast }) {
   const [st, setSt] = useState({});
   const [ai, setAi] = useState(null);
@@ -21,6 +29,9 @@ export default function Settings({ refreshScan, showToast }) {
   const [emailOn, setEmailOn] = useState(true);
   const [pushOn, setPushOn] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [modelOpen, setModelOpen] = useState(false);
+  const [pick, setPick] = useState('__default__');
+  const [models, setModels] = useState(null);
 
   const load = () => {
     api.settings().then((s) => {
@@ -34,6 +45,7 @@ export default function Settings({ refreshScan, showToast }) {
     }).catch(() => {});
     api.aiStatus().then(setAi).catch(() => {});
     api.notifyStatus().then(setNs).catch(() => {});
+    api.aiModels().then(setModels).catch(() => setModels({ free: [], popular: [], error: true }));
   };
   useEffect(load, []);
 
@@ -100,24 +112,95 @@ export default function Settings({ refreshScan, showToast }) {
           </div>
 
           <div className="panel">
-            <div className="panel-h"><h3>AI 模型</h3></div>
+            <div className="panel-h">
+              <h3>AI 模型</h3>
+              <button className="btn ghost sm" onClick={() => setModelOpen((v) => !v)}>
+                {modelOpen ? '收起列表' : '更换模型'}
+              </button>
+            </div>
             {ai && (
               <>
                 <div className="field">
                   <label>当前模型链（自动降级）</label>
-                  <div className="mono" style={{ fontSize: 12, color: 'var(--accent)' }}>{ai.chain?.join(' → ')}</div>
+                  <div className="mono" style={{ fontSize: 12, color: 'var(--accent)', wordBreak: 'break-all' }}>
+                    {ai.chain?.join(' → ')}
+                  </div>
                   <div className="hint">
-                    {ai.has_key ? 'OpenRouter key 已配置' : '⚠ 未配置 OPENROUTER_API_KEY（.env）'}
+                    {ai.has_key ? 'OpenRouter key 已配置 · 换模型无需新 key、无需重启' : '⚠ 未配置 OPENROUTER_API_KEY（.env）'}
                     {ai.circuit_open ? ' · 熔断中，10 分钟后自动恢复' : ''}
                   </div>
                 </div>
-                <div className="field">
-                  <label>覆盖主模型（留空使用默认；可填付费模型提升质量）</label>
-                  <input className="mono" placeholder={ai.model} value={model} onChange={(e) => setModel(e.target.value)} />
-                </div>
-                <button className="btn" disabled={saving} onClick={() => save({ 'openrouter.model': model || undefined })}>
-                  保存
-                </button>
+
+                {modelOpen && (
+                  <>
+                    <div className="field">
+                      <label>从列表选择（{models ? `${models.free.length} 个免费 · ${models.popular.length} 个付费精选` : '加载中…'}）</label>
+                      <select
+                        className="mono"
+                        value={pick}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setPick(v);
+                          if (v === '__custom__') return;
+                          if (v === '__default__') setModel('');
+                          else setModel(v);
+                        }}
+                      >
+                        <option value="__default__">使用默认链（{ai.model}）</option>
+                        <optgroup label="★ 推荐（实测快且稳）">
+                          {RECOMMENDED.map((id) => (
+                            <option key={id} value={id}>{id}</option>
+                          ))}
+                        </optgroup>
+                        {models && (
+                          <optgroup label="付费精选（按 token 计费，几分钱/天）">
+                            {models.popular.map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.id} · ${Number(m.prompt) * 1e6}/1M in
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {models && (
+                          <optgroup label="全部免费模型">
+                            {models.free.map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.id} · ctx {Math.round((m.ctx || 0) / 1000)}k
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        <option value="__custom__">自定义（手动输入模型 ID）…</option>
+                      </select>
+                    </div>
+                    <div className="field">
+                      <label>生效模型 ID（保存后立用于下一轮扫描；备用链自动沿用）</label>
+                      <input
+                        className="mono"
+                        placeholder={pick === '__custom__' ? '例如 google/gemini-2.5-flash' : ai.model}
+                        value={model}
+                        onChange={(e) => setModel(e.target.value)}
+                      />
+                      <div className="hint">完整清单：https://openrouter.ai/models（免费模型限 50 次/天，本项目每轮约 2 次）</div>
+                    </div>
+                    <div className="row2">
+                      <button className="btn" disabled={saving} onClick={() => save({ 'openrouter.model': model.trim() })}>
+                        应用
+                      </button>
+                      <button
+                        className="btn ghost"
+                        disabled={saving}
+                        onClick={() => {
+                          setModel('');
+                          setPick('__default__');
+                          save({ 'openrouter.model': '' });
+                        }}
+                      >
+                        恢复默认
+                      </button>
+                    </div>
+                  </>
+                )}
               </>
             )}
           </div>

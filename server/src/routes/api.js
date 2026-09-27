@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import db from '../db.js';
 import { runScan, scheduleInfo, isScanning } from '../scheduler.js';
-import { aiStatus } from '../ai/openrouter.js';
+import { aiStatus, listModels } from '../ai/openrouter.js';
 import { publicKey, saveSub, dropSub, pushAll, pushConfigured, subCount } from '../notify/webpush.js';
 import { notify } from '../notify/index.js';
 import { emailReady } from '../notify/mailer.js';
@@ -172,6 +172,14 @@ api.get('/scan/status', (req, res) => {
 
 api.get('/ai/status', (req, res) => {
   res.json(aiStatus());
+});
+
+api.get('/ai/models', async (req, res) => {
+  try {
+    res.json(await listModels());
+  } catch (e) {
+    bad(res, `拉取模型列表失败：${e.message}`, 502);
+  }
 });
 
 // ---------- notifications / push ----------

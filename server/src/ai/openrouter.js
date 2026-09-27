@@ -70,6 +70,41 @@ function tripCircuit(reason) {
   console.warn(`[ai] 熔断 10 分钟（${reason}）`);
 }
 
+/** 推荐付费模型（便宜、质量高），供设置页下拉展示 */
+const POPULAR_PAID = [
+  'google/gemini-2.5-flash',
+  'openai/gpt-4o-mini',
+  'deepseek/deepseek-chat',
+  'x-ai/grok-4-fast',
+];
+
+let modelsCache = null;
+let modelsCacheAt = 0;
+
+/** 拉取 OpenRouter 模型列表（公开端点），缓存 1 小时 */
+export async function listModels() {
+  if (modelsCache && Date.now() - modelsCacheAt < 3600e3) return modelsCache;
+  const res = await fetch(`${config.openrouter.baseUrl}/models`, { signal: AbortSignal.timeout(20000) });
+  if (!res.ok) throw new AiError('http_' + res.status, `models HTTP ${res.status}`);
+  const j = await res.json();
+  const all = j.data || [];
+  const toRow = (m) => ({
+    id: m.id,
+    name: m.name,
+    ctx: m.context_length,
+    prompt: m.pricing?.prompt,
+    completion: m.pricing?.completion,
+  });
+  const isFree = (m) =>
+    m.id.endsWith(':free') || (m.pricing && Number(m.pricing.prompt) === 0 && Number(m.pricing.completion) === 0);
+  modelsCache = {
+    free: all.filter(isFree).map(toRow).sort((a, b) => (b.ctx || 0) - (a.ctx || 0)),
+    popular: all.filter((m) => POPULAR_PAID.includes(m.id)).map(toRow),
+  };
+  modelsCacheAt = Date.now();
+  return modelsCache;
+}
+
 function coolModel(model, reason) {
   modelCooldown.set(model, Date.now() + MODEL_COOL_MS);
   console.warn(`[ai] 模型 ${model} 冷却 ${MODEL_COOL_MS / 60000} 分钟（${reason}），尝试切换备用模型`);

@@ -31,6 +31,7 @@ export const api = {
   scanStatus: () => fetch('/api/scan/status').then(j),
   runScan: () => fetch('/api/scan/run', { method: 'POST' }).then(j),
   aiStatus: () => fetch('/api/ai/status').then(j),
+  aiModels: () => fetch('/api/ai/models').then(j),
   notifyStatus: () => fetch('/api/notify/status').then(j),
   settings: () => fetch('/api/settings').then(j),
   saveSettings: (obj) => fetch('/api/settings', { method: 'PUT', ...opt(obj) }).then(j),
