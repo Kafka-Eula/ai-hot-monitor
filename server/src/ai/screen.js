@@ -7,8 +7,9 @@ const SYSTEM = `你是 AI 领域热点分析师。用户给出监控关键词和
 1. relevant：内容是否实质讨论该关键词所指的产品/事件/技术本身。蹭词（仅在标题或无关上下文提及）、营销软文、教程堆砌、与关键词无关 → false。
 2. genuine：内容描述的信息是否真实可信。**判定依据是来源可信度与交叉佐证，绝不是你自己的记忆**：
    - src=blog 是厂商官方博客 RSS（一手官宣，视为权威真实）；
-   - 域名属于厂商官方（openai.com、anthropic.com、blog.google、huggingface.co、deepmind.google、mistral.ai 等）视为一手来源；
+   - 域名属于厂商官方（openai.com、anthropic.com、blog.google、huggingface.co、deepmind.google、mistral.ai、meta.com、ai.meta.com 等）视为一手来源；
    - src=hn/github 等社区讨论：作为"该事件被广泛讨论"的佐证，可信度中等；
+   - **第三方转述型站点（SEO 站、内容农场、云厂商博客、"泄露/爆料"文、模型目录站）若理由中出现"未见官方/缺乏官方/无官方佐证/传闻"等措辞，genuine 必须为 false**——不得一边说没佐证一边放行；
    - 仅营销号、无官方佐证、内容自相矛盾 → false。
 3. confidence：0~1，对 above 两项结论的把握。
 4. reason：一句话中文理由（≤60字），需具体，说明判定依据。
@@ -20,6 +21,21 @@ function dateNote() {
   const today = new Date().toISOString().slice(0, 10);
   return `【当前日期：${today}】你的训练数据存在截止时间，**很多新产品/新模型在你所学之后才发布**。
 严禁以"该产品在我的知识中不存在"为由判定为虚假；一律以给定来源与佐证为准。\n\n`;
+}
+
+/** 官方一手来源域名（用于代码层兜底判定） */
+const OFFICIAL_HOSTS = [
+  'openai.com', 'anthropic.com', 'claude.com', 'blog.google', 'deepmind.google',
+  'huggingface.co', 'meta.com', 'ai.meta.com', 'mistral.ai', 'cohere.com', 'x.ai',
+  'microsoft.com', 'developers.openai.com',
+];
+function isOfficialUrl(url) {
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    return OFFICIAL_HOSTS.some((d) => h === d || h.endsWith('.' + d));
+  } catch {
+    return false;
+  }
 }
 
 const schema = {
@@ -119,8 +135,19 @@ export async function screenKeywords(newItemIds) {
     const term = kws[r.k];
     const kw = kwByTerm.get(term);
     if (!kw) continue;
-    ins.run(kw.id, r.i, r.relevant ? 1 : 0, r.genuine ? 1 : 0, r.confidence ?? 0, r.reason || '', now);
-    if (r.relevant && r.genuine && (r.confidence ?? 0) >= minConf) {
+    let genuine = Boolean(r.genuine);
+    const item = its.find((x) => x.id === r.i);
+    // 兜底：AI 理由自曝"无官方佐证"而来源又非官方 → 强制降级（模型常言行不一）
+    if (genuine && item) {
+      const official = item.source === 'blog' || isOfficialUrl(item.url || '');
+      const hedge = /未见官方|缺乏官方|无官方|没有官方|未见权威|缺乏佐证|无佐证|未经证实|传闻|爆料|泄露|无法证实|存疑/.test(r.reason || '');
+      if (!official && hedge) {
+        genuine = false;
+        console.log(`[ai] 兜底降级: ${item.title.slice(0, 50)}`);
+      }
+    }
+    ins.run(kw.id, r.i, r.relevant ? 1 : 0, genuine ? 1 : 0, r.confidence ?? 0, r.reason || '', now);
+    if (r.relevant && genuine && (r.confidence ?? 0) >= minConf) {
       hits++;
       const item = its.find((x) => x.id === r.i);
       if (item) hitList.push({ keyword: kw, item, reason: r.reason, confidence: r.confidence });
