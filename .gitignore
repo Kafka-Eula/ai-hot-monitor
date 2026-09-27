@@ -1,0 +1,16 @@
+node_modules/
+dist/
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# 密钥/本地配置：只提交 .env.example
+.env
+.env.*
+!.env.example
+
+*.log
+npm-debug.log*
+.DS_Store
+.vscode/

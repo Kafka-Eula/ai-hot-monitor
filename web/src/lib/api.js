@@ -1,0 +1,85 @@
+const j = (r) => {
+  if (!r.ok) return r.json().then((b) => Promise.reject(new Error(b.error || r.status)));
+  return r.json();
+};
+const opt = (body) => ({
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(body),
+});
+
+export const api = {
+  health: () => fetch('/api/health').then(j),
+  keywords: () => fetch('/api/keywords').then(j),
+  addKeyword: (term) => fetch('/api/keywords', opt({ term })).then(j),
+  delKeyword: (id) => fetch(`/api/keywords/${id}`, { method: 'DELETE' }).then(j),
+  patchKeyword: (id, enabled) => fetch(`/api/keywords/${id}`, opt({ enabled })).then(j).catch(() => fetch(`/api/keywords/${id}`, { method: 'PATCH', ...opt({ enabled }) }).then(j)),
+  hits: (id) => fetch(`/api/keywords/${id}/hits`).then(j),
+
+  scopes: () => fetch('/api/scopes').then(j),
+  addScope: (label) => fetch('/api/scopes', opt({ label })).then(j),
+  delScope: (id) => fetch(`/api/scopes/${id}`, { method: 'DELETE' }).then(j),
+
+  topics: (limit = 50) => fetch(`/api/topics?limit=${limit}`).then(j),
+  topic: (id) => fetch(`/api/topics/${id}`).then(j),
+  items: (limit = 150) => fetch(`/api/items?limit=${limit}`).then(j),
+
+  notices: () => fetch('/api/notices').then(j),
+  readNotice: (id) => fetch('/api/notices/read', opt({ id })).then(j),
+  readAll: () => fetch('/api/notices/read', opt({ all: true })).then(j),
+
+  scanStatus: () => fetch('/api/scan/status').then(j),
+  runScan: () => fetch('/api/scan/run', { method: 'POST' }).then(j),
+  aiStatus: () => fetch('/api/ai/status').then(j),
+  notifyStatus: () => fetch('/api/notify/status').then(j),
+  settings: () => fetch('/api/settings').then(j),
+  saveSettings: (obj) => fetch('/api/settings', { method: 'PUT', ...opt(obj) }).then(j),
+  pushKey: () => fetch('/api/push/public-key').then(j),
+  pushSubscribe: (sub) => fetch('/api/push/subscribe', opt(sub)).then(j),
+  pushTest: () => fetch('/api/push/test', { method: 'POST' }).then(j),
+  notifyTest: (title, body) => fetch('/api/notify/test', opt({ title, body })).then(j),
+};
+
+export function subscribe(onNotice, onScan) {
+  const es = new EventSource('/api/events');
+  es.addEventListener('notice', (e) => onNotice?.(JSON.parse(e.data)));
+  es.addEventListener('scan', (e) => onScan?.(JSON.parse(e.data)));
+  return () => es.close();
+}
+
+export async function enablePush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('此浏览器不支持推送');
+  const reg = await navigator.serviceWorker.register('/sw.js');
+  const { publicKey } = await api.pushKey();
+  const sub = await reg.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(publicKey),
+  });
+  await api.pushSubscribe(sub.toJSON());
+  return sub;
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+}
+
+export const fmtAgo = (iso) => {
+  if (!iso) return '—';
+  const s = Math.floor((Date.now() - Date.parse(iso)) / 1000);
+  if (s < 60) return `${s}秒前`;
+  if (s < 3600) return `${Math.floor(s / 60)}分钟前`;
+  if (s < 86400) return `${Math.floor(s / 3600)}小时前`;
+  return `${Math.floor(s / 86400)}天前`;
+};
+
+export const SOURCE_LABEL = {
+  hn: 'Hacker News',
+  gh_trending: 'GitHub',
+  hf_papers: 'HF Papers',
+  blog: '官方博客',
+  web_search: '网页搜索',
+  twitter: 'X / Twitter',
+};

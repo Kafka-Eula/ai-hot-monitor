@@ -1,0 +1,25 @@
+{
+  "name": "hotpulse",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI 热点雷达 - 自动发现 AI 领域热点并通知",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm --workspace server run dev",
+    "dev:web": "npm --workspace web run dev",
+    "build": "npm --workspace web run build && npm --workspace server run start",
+    "start": "npm --workspace server run start",
+    "test": "npm --workspace server run test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true,
+    "better-sqlite3@12.11.1": true
+  }
+}
