@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react';
 import { api, fmtAgo, SOURCE_LABEL } from '../lib/api.js';
 
 const SRC_COLOR = {
-  hn: '#ff8a3d',
-  gh_trending: '#8ab4ff',
-  hf_papers: '#c58bff',
-  blog: '#3ef2a5',
-  web_search: '#ffd166',
-  twitter: '#e8e8e8',
+  hn: '#fb923c',
+  gh_trending: '#38bdf8',
+  hf_papers: '#a78bfa',
+  blog: '#34d399',
+  web_search: '#fbbf24',
+  twitter: '#e879f9',
 };
 
 export default function TopicModal({ id, onClose }) {
@@ -61,7 +61,7 @@ export default function TopicModal({ id, onClose }) {
 
             <div className="src-bar">
               {Object.entries(bySrc).map(([s, c]) => (
-                <i key={s} style={{ width: `${(c / t.items.length) * 100}%`, background: SRC_COLOR[s] || '#3ef2a5' }} />
+                <i key={s} style={{ width: `${(c / t.items.length) * 100}%`, background: SRC_COLOR[s] || '#22d3ee' }} />
               ))}
             </div>
             <div className="src-legend">
@@ -74,7 +74,7 @@ export default function TopicModal({ id, onClose }) {
 
             <div className="section-title" style={{ marginTop: 4 }}>原始条目 · {t.items.length} 条</div>
             {t.items.map((i) => (
-              <div key={i.id} className="hit" style={{ borderLeft: `2px solid ${SRC_COLOR[i.source] || '#3ef2a5'}` }}>
+              <div key={i.id} className="hit" style={{ borderLeft: `2px solid ${SRC_COLOR[i.source] || '#22d3ee'}` }}>
                 <div className="hit-top">
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <a href={i.url} target="_blank" rel="noreferrer">{i.title}</a>

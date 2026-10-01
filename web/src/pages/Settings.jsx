@@ -122,7 +122,7 @@ export default function Settings({ refreshScan, showToast }) {
               <>
                 <div className="field">
                   <label>当前模型链（自动降级）</label>
-                  <div className="mono" style={{ fontSize: 12, color: 'var(--accent)', wordBreak: 'break-all' }}>
+                  <div className="mono" style={{ fontSize: 12, color: 'var(--cyan)', wordBreak: 'break-all' }}>
                     {ai.chain?.join(' → ')}
                   </div>
                   <div className="hint">
@@ -227,7 +227,7 @@ export default function Settings({ refreshScan, showToast }) {
             {ns?.push?.configured ? (
               <>
                 <div className="hint" style={{ marginBottom: 10 }}>
-                  订阅者：<span className="mono" style={{ color: 'var(--accent)' }}>{ns.push.subscribers}</span> · 关闭页面也能收到系统通知
+                  订阅者：<span className="mono" style={{ color: 'var(--cyan)' }}>{ns.push.subscribers}</span> · 关闭页面也能收到系统通知
                 </div>
                 <label className="toggle" style={{ marginBottom: 12 }}>
                   <input type="checkbox" hidden checked={pushOn} onChange={(e) => { setPushOn(e.target.checked); save({ 'notify.webpush.enabled': e.target.checked }); }} />
@@ -291,7 +291,7 @@ function SourceStatus() {
   return (
     <div className="src-legend" style={{ fontSize: 12 }}>
       {Object.entries(last).map(([k, v]) => (
-        <span key={k} style={{ color: v.ok ? 'var(--accent)' : 'var(--red)' }}>
+        <span key={k} style={{ color: v.ok ? 'var(--cyan)' : 'var(--red)' }}>
           {k} {v.ok ? `✓ ${v.count ?? 0}` : '✗'} {v.ms}ms
         </span>
       ))}

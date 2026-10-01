@@ -2,13 +2,15 @@ import { useEffect, useRef, useState } from 'react';
 import { SOURCE_LABEL } from '../lib/api.js';
 
 export const SRC_COLOR = {
-  hn: '#ff8a3d',
-  gh_trending: '#8ab4ff',
-  hf_papers: '#c58bff',
-  blog: '#3ef2a5',
-  web_search: '#ffd166',
-  twitter: '#e8e8e8',
+  hn: '#fb923c',
+  gh_trending: '#38bdf8',
+  hf_papers: '#a78bfa',
+  blog: '#34d399',
+  web_search: '#fbbf24',
+  twitter: '#e879f9',
 };
+
+const ACCENT = '#22D3EE'; // 主强调：青电光
 
 const SPAN = 6 * 3600e3; // 雷达时间窗口：近 6 小时（圆心=最新，外圈=6 小时前）
 
@@ -109,7 +111,7 @@ export default function RadarScope({ items, scanning, sources }) {
         const rr = R * (0.1 + Math.min(0.88, age + jr));
         const x = cx + Math.cos(a) * rr;
         const y = cy + Math.sin(a) * rr;
-        const col = SRC_COLOR[it.source] || '#3ef2a5';
+        const col = SRC_COLOR[it.source] || '#22d3ee';
         const alpha = 0.28 + (1 - age) * 0.62;
         const rad = (1.6 + (1 - age) * 2.6) * dpr;
 
@@ -147,9 +149,9 @@ export default function RadarScope({ items, scanning, sources }) {
       const sg = ctx.createConicGradient
         ? (() => {
             const gr = ctx.createConicGradient(sa, cx, cy);
-            gr.addColorStop(0, hexA('#3ef2a5', 0.12));
-            gr.addColorStop(0.1, hexA('#3ef2a5', 0));
-            gr.addColorStop(1, hexA('#3ef2a5', 0));
+            gr.addColorStop(0, hexA('#22d3ee', 0.12));
+            gr.addColorStop(0.1, hexA('#22d3ee', 0));
+            gr.addColorStop(1, hexA('#22d3ee', 0));
             return gr;
           })()
         : null;
@@ -163,8 +165,8 @@ export default function RadarScope({ items, scanning, sources }) {
         ctx.restore();
       }
       const grad = ctx.createLinearGradient(cx, cy, cx + Math.cos(sa) * R, cy + Math.sin(sa) * R);
-      grad.addColorStop(0, hexA('#3ef2a5', 0.08));
-      grad.addColorStop(1, hexA('#3ef2a5', 0.4));
+      grad.addColorStop(0, hexA('#22d3ee', 0.08));
+      grad.addColorStop(1, hexA('#22d3ee', 0.4));
       ctx.strokeStyle = grad;
       ctx.lineWidth = 1.4 * dpr;
       ctx.beginPath();
@@ -173,8 +175,8 @@ export default function RadarScope({ items, scanning, sources }) {
       ctx.stroke();
 
       // 中心
-      ctx.fillStyle = '#3ef2a5';
-      ctx.shadowColor = '#3ef2a5';
+      ctx.fillStyle = '#22d3ee';
+      ctx.shadowColor = '#22d3ee';
       ctx.shadowBlur = 10 * dpr;
       ctx.beginPath();
       ctx.arc(cx, cy, 2.4 * dpr, 0, Math.PI * 2);
