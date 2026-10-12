@@ -68,12 +68,15 @@ function preMatch(item, term) {
   return t.includes(term.toLowerCase()) || t.includes(term.toLowerCase().replace(/\s+/g, '-'));
 }
 
+/** 每批最多甄别的候选对数（防大批量超时） */
+const SCREEN_BATCH = 25;
+
 /**
  * 对本轮新入库条目做关键词甄别。
  * @param {number[]} newItemIds 本轮新入库的 item id
  * @returns { hits:number, screened:number }
  */
-export async function screenKeywords(newItemIds) {
+export async function screenKeywords(newItemIds, onProgress) {
   const keywords = db
     .prepare('SELECT id, term FROM keywords WHERE enabled=1')
     .all();
@@ -100,25 +103,6 @@ export async function screenKeywords(newItemIds) {
   const fresh = pairs.filter((p) => !seen.get(p.kw.id, p.it.id));
   if (!fresh.length) return { hits: 0, screened: 0 };
 
-  const kws = [...new Set(fresh.map((p) => p.kw.term))];
-  const its = [...new Map(fresh.map((p) => [p.it.id, p.it])).values()];
-  const user =
-    dateNote() +
-    JSON.stringify({
-      keywords: kws,
-      items: its.map((it) => ({
-        i: it.id,
-        title: it.title.slice(0, 200),
-        summary: (it.summary || '').slice(0, 300),
-        source: it.source,
-        url: (it.url || '').slice(0, 160),
-        author: it.author,
-      })),
-      pairs: fresh.map((p) => ({ k: kws.indexOf(p.kw.term), i: p.it.id })),
-    });
-
-  const { data } = await chatJSON({ system: SYSTEM, user, schema, name: 'screen' });
-
   const ins = db.prepare(
     `INSERT INTO hits(keyword_id,item_id,relevant,genuine,confidence,reason,screened_at)
      VALUES(?,?,?,?,?,?,?)
@@ -126,32 +110,67 @@ export async function screenKeywords(newItemIds) {
        confidence=excluded.confidence, reason=excluded.reason, screened_at=excluded.screened_at`
   );
   const minConf = Number(getSetting('thresholds.minConfidence', config.thresholds.minConfidence));
-  let hits = 0;
-  const hitList = [];
-  const now = new Date().toISOString();
   const kwByTerm = new Map(keywords.map((k) => [k.term, k]));
+  const now = new Date().toISOString();
+  let hits = 0;
+  let screened = 0;
+  const hitList = [];
+  const failedIds = new Set();
 
-  for (const r of data?.results || []) {
-    const term = kws[r.k];
-    const kw = kwByTerm.get(term);
-    if (!kw) continue;
-    let genuine = Boolean(r.genuine);
-    const item = its.find((x) => x.id === r.i);
-    // 兜底：AI 理由自曝"无官方佐证"而来源又非官方 → 强制降级（模型常言行不一）
-    if (genuine && item) {
-      const official = item.source === 'blog' || isOfficialUrl(item.url || '');
-      const hedge = /未见官方|缺乏官方|无官方|没有官方|未见权威|缺乏佐证|无佐证|未经证实|传闻|爆料|泄露|无法证实|存疑/.test(r.reason || '');
-      if (!official && hedge) {
-        genuine = false;
-        console.log(`[ai] 兜底降级: ${item.title.slice(0, 50)}`);
+  // 分批：每批最多 SCREEN_BATCH 个候选对，避免大批量一次请求超时
+  for (let b = 0; b < fresh.length; b += SCREEN_BATCH) {
+    const batch = fresh.slice(b, b + SCREEN_BATCH);
+    const kws = [...new Set(batch.map((p) => p.kw.term))];
+    const its = [...new Map(batch.map((p) => [p.it.id, p.it])).values()];
+    const user =
+      dateNote() +
+      JSON.stringify({
+        keywords: kws,
+        items: its.map((it) => ({
+          i: it.id,
+          title: it.title.slice(0, 200),
+          summary: (it.summary || '').slice(0, 300),
+          source: it.source,
+          url: (it.url || '').slice(0, 160),
+          author: it.author,
+        })),
+        pairs: batch.map((p) => ({ k: kws.indexOf(p.kw.term), i: p.it.id })),
+      });
+
+    let data;
+    try {
+      ({ data } = await chatJSON({ system: SYSTEM, user, schema, name: 'screen' }));
+    } catch (e) {
+      console.warn(`[ai] 甄别批次 ${Math.floor(b / SCREEN_BATCH) + 1} 失败: ${e.code || ''} ${e.message}`);
+      for (const p of batch) failedIds.add(p.it.id); // 该批未写 hits，下轮重试
+      onProgress?.({ phase: 'screen', done: Math.min(b + SCREEN_BATCH, fresh.length), total: fresh.length });
+      continue;
+    }
+
+    for (const r of data?.results || []) {
+      const kw = kwByTerm.get(kws[r.k]);
+      if (!kw) continue;
+      const item = its.find((x) => x.id === r.i);
+      if (!item) continue;
+      let genuine = Boolean(r.genuine);
+      // 兜底：AI 理由自曝"无官方佐证"而来源又非官方 → 强制降级（模型常言行不一）
+      if (genuine) {
+        const official = item.source === 'blog' || isOfficialUrl(item.url || '');
+        const hedge = /未见官方|缺乏官方|无官方|没有官方|未见权威|缺乏佐证|无佐证|未经证实|传闻|爆料|泄露|无法证实|存疑/.test(r.reason || '');
+        if (!official && hedge) {
+          genuine = false;
+          console.log(`[ai] 兜底降级: ${item.title.slice(0, 50)}`);
+        }
+      }
+      ins.run(kw.id, r.i, r.relevant ? 1 : 0, genuine ? 1 : 0, r.confidence ?? 0, r.reason || '', now);
+      screened++;
+      if (r.relevant && genuine && (r.confidence ?? 0) >= minConf) {
+        hits++;
+        hitList.push({ keyword: kw, item, reason: r.reason, confidence: r.confidence });
       }
     }
-    ins.run(kw.id, r.i, r.relevant ? 1 : 0, genuine ? 1 : 0, r.confidence ?? 0, r.reason || '', now);
-    if (r.relevant && genuine && (r.confidence ?? 0) >= minConf) {
-      hits++;
-      const item = its.find((x) => x.id === r.i);
-      if (item) hitList.push({ keyword: kw, item, reason: r.reason, confidence: r.confidence });
-    }
+    console.log(`[ai] 甄别批次 ${Math.floor(b / SCREEN_BATCH) + 1}: ${batch.length} 对完成`);
+    onProgress?.({ phase: 'screen', done: Math.min(b + SCREEN_BATCH, fresh.length), total: fresh.length });
   }
 
   if (hitList.length) {
@@ -163,6 +182,5 @@ export async function screenKeywords(newItemIds) {
     t();
   }
 
-
-  return { hits, screened: data?.results?.length || 0, hitList };
+  return { hits, screened, hitList, failedIds: [...failedIds] };
 }

@@ -41,13 +41,14 @@ export const api = {
   notifyTest: (title, body) => fetch('/api/notify/test', opt({ title, body })).then(j),
 };
 
-export function subscribe(onNotice, onScan, onStatus) {
+export function subscribe(onNotice, onScan, onStatus, onProgress) {
   let es;
   const open = () => {
     es = new EventSource('/api/events');
     es.addEventListener('hello', () => onStatus?.('open'));
     es.addEventListener('notice', (e) => onNotice?.(JSON.parse(e.data)));
     es.addEventListener('scan', (e) => onScan?.(JSON.parse(e.data)));
+    es.addEventListener('scan_progress', (e) => onProgress?.(JSON.parse(e.data)));
     es.onerror = () => onStatus?.(es.readyState === 0 ? 'retrying' : 'closed');
   };
   open();

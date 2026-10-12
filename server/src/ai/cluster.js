@@ -44,95 +44,114 @@ const schema = {
 };
 
 /**
- * 热点聚类评分。
- * @param {number[]} newItemIds 本轮新入库条目
- * @returns { topics:number, newHot:[], updated:[] }
+ * 热点聚类评分（分批处理，避免大批量超时）。
+ * @param {number[]} newItemIds 本轮待处理 item id
+ * @returns { topics:number, newHot:[], updated:[], failedIds:number[] }
  */
-export async function clusterTopics(newItemIds) {
-  const scopes = db.prepare('SELECT id, label FROM scopes WHERE enabled=1').all();
-  if (!newItemIds.length) return { topics: 0, newHot: [], updated: [] };
+const CLUSTER_BATCH = 20; // 免费模型处理大 prompt 易超时，20 条/批成功率更高
 
-  const placeholders = newItemIds.map(() => '?').join(',');
-  const items = db
+export async function clusterTopics(newItemIds, onProgress) {
+  const scopes = db.prepare('SELECT id, label FROM scopes WHERE enabled=1').all();
+  if (!newItemIds.length) return { topics: 0, newHot: [], updated: [], failedIds: [] };
+
+  const allItems = db
     .prepare(
-      `SELECT id, source, title, summary, url, author, published_at, metrics FROM items WHERE id IN (${placeholders})`
+      `SELECT id, source, title, summary, url, author, published_at, metrics FROM items WHERE id IN (${newItemIds.map(() => '?').join(',')})`
     )
     .all(...newItemIds);
-  if (!items.length) return { topics: 0, newHot: [], updated: [] };
-
-  // 近期既有话题（供 AI 沿用 cluster_key）
-  const existing = db
-    .prepare('SELECT cluster_key, title, score FROM topics ORDER BY last_updated DESC LIMIT 30')
-    .all();
+  if (!allItems.length) return { topics: 0, newHot: [], updated: [], failedIds: [] };
 
   const today = new Date().toISOString().slice(0, 10);
   const dateNote = `【当前日期：${today}】你的训练数据有截止时间，许多新模型/新产品是在那之后发布的，**不得以"知识中不存在"判定为虚构**，以给定来源与佐证为准。\n\n`;
-  const user =
-    dateNote +
-    JSON.stringify({
-      scopes,
-      existing_topics: existing,
-      items: items.map((it) => ({
-        i: it.id,
-        src: it.source,
-        title: it.title.slice(0, 180),
-        sum: (it.summary || '').slice(0, 240),
-        author: it.author,
-        at: it.published_at,
-        m: it.metrics,
-      })),
-    });
-
-  const { data } = await chatJSON({ system: SYSTEM, user, schema, name: 'topics' });
 
   const now = new Date().toISOString();
   const minScore = Number(getSetting('thresholds.minTopicScore', config.thresholds.minTopicScore));
   const newHot = [];
   const updated = [];
-  const tx = db.transaction(() => {
-    for (const t of data?.topics || []) {
-      const ids = JSON.stringify((t.item_ids || []).filter((id) => items.some((x) => x.id === id)));
-      const prev = db.prepare('SELECT * FROM topics WHERE cluster_key=?').get(t.cluster_key);
-      if (prev) {
-        const merged = JSON.stringify(
-          [...new Set([...JSON.parse(prev.item_ids || '[]'), ...JSON.parse(ids)])]
+  const failedIds = [];
+  let topics = 0;
+
+  const upsert = (t, validIds) => {
+    const prev = db.prepare('SELECT * FROM topics WHERE cluster_key=?').get(t.cluster_key);
+    if (prev) {
+      const merged = JSON.stringify([...new Set([...JSON.parse(prev.item_ids || '[]'), ...validIds])]);
+      const newScore = Math.max(prev.score, Number(t.score) || 0);
+      db.prepare(
+        `UPDATE topics SET title=?, summary_zh=?, why_hot=?, score=?, item_ids=?, last_updated=?, scope_id=COALESCE(?, scope_id) WHERE id=?`
+      ).run(t.title, t.summary_zh, t.why_hot, newScore, merged, now, t.scope_id ?? null, prev.id);
+      if (newScore >= minScore && prev.score < minScore) {
+        updated.push({ topicId: prev.id, title: t.title, score: newScore, summary_zh: t.summary_zh, why_hot: t.why_hot });
+      }
+    } else {
+      const r = db
+        .prepare(
+          `INSERT INTO topics(scope_id,title,summary_zh,why_hot,score,item_ids,first_seen,last_updated,cluster_key)
+           VALUES(?,?,?,?,?,?,?,?,?)`
+        )
+        .run(
+          t.scope_id ?? null,
+          t.title,
+          t.summary_zh,
+          t.why_hot,
+          Number(t.score) || 0,
+          JSON.stringify(validIds),
+          now,
+          now,
+          t.cluster_key
         );
-        const newScore = Math.max(prev.score, Number(t.score) || 0);
-        db.prepare(
-          `UPDATE topics SET title=?, summary_zh=?, why_hot=?, score=?, item_ids=?, last_updated=?, scope_id=COALESCE(?, scope_id) WHERE id=?`
-        ).run(t.title, t.summary_zh, t.why_hot, newScore, merged, now, t.scope_id ?? null, prev.id);
-        if (newScore >= minScore && prev.score < minScore) {
-          updated.push({ topicId: prev.id, title: t.title, score: newScore });
-        }
-      } else {
-        const r = db
-          .prepare(
-            `INSERT INTO topics(scope_id,title,summary_zh,why_hot,score,item_ids,first_seen,last_updated,cluster_key)
-             VALUES(?,?,?,?,?,?,?,?,?)`
-          )
-          .run(
-            t.scope_id ?? null,
-            t.title,
-            t.summary_zh,
-            t.why_hot,
-            Number(t.score) || 0,
-            ids,
-            now,
-            now,
-            t.cluster_key
-          );
-        if ((Number(t.score) || 0) >= minScore) {
-          newHot.push({
-            topicId: Number(r.lastInsertRowid),
-            title: t.title,
-            score: Number(t.score) || 0,
-            summary_zh: t.summary_zh,
-            why_hot: t.why_hot,
-          });
-        }
+      topics++;
+      if ((Number(t.score) || 0) >= minScore) {
+        newHot.push({
+          topicId: Number(r.lastInsertRowid),
+          title: t.title,
+          score: Number(t.score) || 0,
+          summary_zh: t.summary_zh,
+          why_hot: t.why_hot,
+        });
       }
     }
-  });
-  tx();
-  return { topics: (data?.topics || []).length, newHot, updated };
+  };
+
+  // 分批：每批取当前最新既有话题，保证跨批能沿用 cluster_key
+  for (let i = 0; i < allItems.length; i += CLUSTER_BATCH) {
+    const batch = allItems.slice(i, i + CLUSTER_BATCH);
+    const batchIds = new Set(batch.map((b) => b.id));
+    const existing = db
+      .prepare('SELECT cluster_key, title, score FROM topics ORDER BY last_updated DESC LIMIT 30')
+      .all();
+    const user =
+      dateNote +
+      JSON.stringify({
+        scopes,
+        existing_topics: existing,
+        items: batch.map((it) => ({
+          i: it.id,
+          src: it.source,
+          title: it.title.slice(0, 180),
+          sum: (it.summary || '').slice(0, 240),
+          author: it.author,
+          at: it.published_at,
+          m: it.metrics,
+        })),
+      });
+
+    try {
+      const { data } = await chatJSON({ system: SYSTEM, user, schema, name: 'topics' });
+      const tx = db.transaction(() => {
+        for (const t of data?.topics || []) {
+          const valid = (t.item_ids || []).filter((id) => batchIds.has(id));
+          if (!valid.length) continue;
+          upsert(t, valid);
+        }
+      });
+      tx();
+      console.log(`[ai] 聚类批次 ${Math.floor(i / CLUSTER_BATCH) + 1}: ${batch.length} 条 → ${(data?.topics || []).length} 话题`);
+    } catch (e) {
+      console.warn(`[ai] 聚类批次 ${Math.floor(i / CLUSTER_BATCH) + 1} 失败: ${e.code || ''} ${e.message}`);
+      failedIds.push(...batch.map((b) => b.id));
+    }
+    onProgress?.({ phase: 'cluster', done: Math.min(i + CLUSTER_BATCH, allItems.length), total: allItems.length });
+  }
+
+  return { topics, newHot, updated, failedIds };
 }

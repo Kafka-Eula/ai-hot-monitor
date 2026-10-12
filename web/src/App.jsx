@@ -12,6 +12,8 @@ const TABS = [
   { id: 'settings', label: 'CONFIG 设置' },
 ];
 
+const PHASE_ZH = { screen: '甄别', cluster: '聚类', collect: '抓取' };
+
 function routeFromHash() {
   const h = location.hash.replace(/^#\/?/, '');
   if (h.startsWith('watch')) return { tab: 'watch' };
@@ -31,6 +33,7 @@ export default function App() {
   const [topicModal, setTopicModal] = useState(null);
   const [pollTick, setPollTick] = useState(0);
   const [sse, setSse] = useState('open');
+  const [progress, setProgress] = useState(null); // {phase,done,total}
   const toastTimer = useRef();
 
   const showToast = useCallback((msg) => {
@@ -75,6 +78,7 @@ export default function App() {
       .then((s) => {
         setScanning(Boolean(s.running));
         setScanInfo(s);
+        setProgress(s.progress || null);
       })
       .catch(() => {});
   }, []);
@@ -86,6 +90,7 @@ export default function App() {
         .scanStatus()
         .then((s) => {
           setScanning(Boolean(s.running));
+          setProgress(s.progress || null);
           setScanInfo((prev) => {
             // 兜底：SSE 丢失时靠轮询发现新扫描结束，同样触发页面数据刷新
             const prevId = prev?.recent?.[0]?.id;
@@ -108,8 +113,10 @@ export default function App() {
       (ev) => {
         if (ev.state === 'start') {
           setScanning(true);
+          setProgress(null);
         } else {
           setScanning(false);
+          setProgress(null);
           refreshScan();
           setPollTick((x) => x + 1);
           if (ev.ok) {
@@ -126,7 +133,8 @@ export default function App() {
         setSse(status);
         if (status === 'retrying') showToast('⚠ 实时连接断开，降级为轮询模式');
         if (status === 'open') setNoticesFresh();
-      }
+      },
+      (p) => setProgress(p)
     );
     return close;
   }, [showToast, refreshScan]);
@@ -171,7 +179,11 @@ export default function App() {
             <span className="status" title={scanInfo?.nextRunAt ? `下次扫描 ${new Date(scanInfo.nextRunAt).toLocaleTimeString()}` : ''}>
               <span className={`dot ${scanning ? 'busy pulsing' : 'ok'}`} />
               {scanning
-                ? 'SCANNING'
+                ? progress && progress.total
+                  ? `SCANNING · ${PHASE_ZH[progress.phase] || progress.phase} ${progress.done}/${progress.total}`
+                  : progress
+                    ? `SCANNING · ${PHASE_ZH[progress.phase] || '处理'}`
+                    : 'SCANNING'
                 : scanInfo?.lastScan?.startedAt
                   ? `IDLE · ${fmtAgo(scanInfo.lastScan.startedAt)}`
                   : 'IDLE'}
@@ -186,7 +198,7 @@ export default function App() {
         </header>
 
         {route.tab === 'radar' && (
-          <Radar scanning={scanning} scanInfo={scanInfo} pollTick={pollTick} onOpenTopic={openTopic} showToast={showToast} />
+          <Radar scanning={scanning} scanInfo={scanInfo} pollTick={pollTick} progress={progress} onOpenTopic={openTopic} showToast={showToast} />
         )}
         {route.tab === 'watch' && <Watch pollTick={pollTick} scanning={scanning} showToast={showToast} />}
         {route.tab === 'settings' && <Settings refreshScan={refreshScan} showToast={showToast} />}

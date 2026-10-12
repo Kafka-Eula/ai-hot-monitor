@@ -4,6 +4,8 @@ data/
 *.db
 *.db-shm
 *.db-wal
+server.out.log
+server.err.log
 
 # 密钥/本地配置：只提交 .env.example
 .env

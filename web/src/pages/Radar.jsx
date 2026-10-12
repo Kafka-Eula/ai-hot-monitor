@@ -5,7 +5,7 @@ import { BackgroundBeams } from '../components/ui/background-beams.jsx';
 import { Spotlight } from '../components/ui/spotlight.jsx';
 import { BentoGrid, BentoCard } from '../components/ui/bento-grid.jsx';
 
-export default function Radar({ scanning, scanInfo, pollTick, onOpenTopic, showToast }) {
+export default function Radar({ scanning, scanInfo, pollTick, progress, onOpenTopic, showToast }) {
   const [topics, setTopics] = useState([]);
   const [items, setItems] = useState([]);
   const [showAll, setShowAll] = useState(false);
@@ -47,7 +47,11 @@ export default function Radar({ scanning, scanInfo, pollTick, onOpenTopic, showT
           <div>
             <div className="hud-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span className={`dot ${scanning ? 'busy pulsing' : 'ok'}`} />
-              {scanning ? 'SCANNING // 正在扫描' : 'LIVE // 雷达在线'}
+              {scanning
+                ? progress && progress.total
+                  ? `SCANNING // ${progress.phase === 'cluster' ? '聚类' : progress.phase === 'screen' ? '甄别' : '抓取'}中 ${progress.done}/${progress.total}`
+                  : 'SCANNING // 正在扫描'
+                : 'LIVE // 雷达在线'}
             </div>
             <h1 className="hero-title title-gradient">AI 热点雷达</h1>
             <p className="hero-sub">

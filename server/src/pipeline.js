@@ -4,6 +4,12 @@ import { screenKeywords } from './ai/screen.js';
 import { clusterTopics } from './ai/cluster.js';
 import { aiReady, aiStatus } from './ai/openrouter.js';
 import { notify } from './notify/index.js';
+import { publish } from './notify/sse.js';
+
+let currentProgress = null; // {phase,done,total} 供轮询兜底
+export function scanProgress() {
+  return currentProgress;
+}
 
 const insertItem = db.prepare(
   `INSERT OR IGNORE INTO items(source,url,title,summary,author,published_at,metrics,raw_hash,collected_at)
@@ -27,6 +33,7 @@ export function buildQueries() {
  */
 export async function runPipeline() {
   const startedAt = new Date().toISOString();
+  currentProgress = { phase: 'collect' };
   const { allQueries } = buildQueries();
   const lastDone = db.prepare("SELECT started_at FROM scans WHERE ok=1 ORDER BY id DESC LIMIT 1").get();
   // 重叠窗口 10 分钟，防止边界漏抓；首轮回溯 6 小时
@@ -67,32 +74,38 @@ export async function runPipeline() {
     ai.reason = aiStatus().has_key ? 'circuit_open' : 'no_api_key';
   } else {
     ai.skipped = false;
-    let screenOk = false;
-    let clusterOk = false;
+    const failedSet = new Set();
+    const onProgress = (p) => {
+      currentProgress = p;
+      publish('scan_progress', p);
+    };
     try {
-      const s = await screenKeywords(pendingIds);
+      const s = await screenKeywords(pendingIds, onProgress);
       ai.screened = s.screened || 0;
       ai.hits = s.hits || 0;
       ai.hitList = s.hitList || [];
-      screenOk = true;
+      for (const id of s.failedIds || []) failedSet.add(id);
     } catch (e) {
       ai.screenError = `${e.code || ''} ${e.message}`.trim().slice(0, 300);
       console.warn('[ai] 甄别失败（下轮重试）:', ai.screenError);
+      for (const id of pendingIds) failedSet.add(id); // 整体失败全部重试
     }
     try {
-      const c = await clusterTopics(pendingIds);
+      const c = await clusterTopics(pendingIds, onProgress);
       ai.topics = c.topics || 0;
       ai.newHot = c.newHot || [];
-      clusterOk = true;
+      for (const id of c.failedIds || []) failedSet.add(id);
     } catch (e) {
       ai.clusterError = `${e.code || ''} ${e.message}`.trim().slice(0, 300);
       console.warn('[ai] 聚类失败（下轮重试）:', ai.clusterError);
     }
-    // 两阶段都成功才标记完成；任一失败则保留待下轮重试
-    if (screenOk && clusterOk) {
-      const ph = pendingIds.map(() => '?').join(',');
-      db.prepare(`UPDATE items SET ai_done=1 WHERE id IN (${ph})`).run(...pendingIds);
+    // 两阶段都成功的条目标记完成；失败保留 ai_done=0 下轮重试
+    const doneIds = pendingIds.filter((id) => !failedSet.has(id));
+    if (doneIds.length) {
+      const ph = doneIds.map(() => '?').join(',');
+      db.prepare(`UPDATE items SET ai_done=1 WHERE id IN (${ph})`).run(...doneIds);
     }
+    ai.retrying = failedSet.size;
 
     // ---- 通知分发（失败不影响扫描结果）----
     try {
@@ -118,6 +131,7 @@ export async function runPipeline() {
   }
 
   const finishedAt = new Date().toISOString();
+  currentProgress = null;
   const ok = Object.values(stats).every((s) => s.ok) && allQueries.length > 0;
   const summary = {
     queries: allQueries.length,

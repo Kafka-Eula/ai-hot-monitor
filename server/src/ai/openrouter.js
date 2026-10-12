@@ -120,7 +120,7 @@ async function callOnce(body) {
       'X-Title': 'HotPulse',
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(60000),
+    signal: AbortSignal.timeout(90000),
   }).catch((e) => {
     if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
       throw new AiError('model_slow', `请求超时(60s): ${body.model}`);
@@ -131,7 +131,10 @@ async function callOnce(body) {
     const txt = (await res.text().catch(() => '')).slice(0, 300);
     if (res.status === 402) throw new AiError('no_credit', `余额不足: ${txt}`);
     if (res.status === 429) throw new AiError('rate_limited', `限流: ${txt}`);
-    if (res.status >= 500) throw new AiError('model_slow', `上游错误 HTTP ${res.status}`);
+    // 上游 provider 故障（DEGRADED/Provider returned error）伪装成 400/5xx：应换模型而非格式降级
+    if (res.status >= 500 || /Provider returned error|DEGRADED|is_byok/i.test(txt)) {
+      throw new AiError('model_slow', `上游错误 HTTP ${res.status}: ${txt.slice(0, 120)}`);
+    }
     throw new AiError('http_' + res.status, `HTTP ${res.status}: ${txt}`);
   }
   return res.json();

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import db from '../db.js';
 import { runScan, scheduleInfo, isScanning } from '../scheduler.js';
+import { scanProgress } from '../pipeline.js';
 import { aiStatus, listModels } from '../ai/openrouter.js';
 import { publicKey, saveSub, dropSub, pushAll, pushConfigured, subCount } from '../notify/webpush.js';
 import { notify } from '../notify/index.js';
@@ -167,7 +168,7 @@ api.get('/scan/status', (req, res) => {
     .prepare('SELECT * FROM scans ORDER BY id DESC LIMIT 10')
     .all()
     .map((r) => ({ ...r, stats: JSON.parse(r.stats || '{}') }));
-  res.json({ ...info, running: isScanning(), recent });
+  res.json({ ...info, running: isScanning(), progress: scanProgress(), recent });
 });
 
 api.get('/ai/status', (req, res) => {
