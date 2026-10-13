@@ -86,8 +86,27 @@ export const fmtAgo = (iso) => {
 export const SOURCE_LABEL = {
   hn: 'Hacker News',
   gh_trending: 'GitHub',
+  gh_search: 'GitHub 新库',
   hf_papers: 'HF Papers',
   blog: '官方博客',
   web_search: '网页搜索',
+  news_search: '新闻搜索',
+  cn_search: '360新闻搜索',
+  cn_media: '中文媒体',
+  lobsters: 'Lobsters',
+  reddit: 'Reddit',
   twitter: 'X / Twitter',
+};
+
+/** 来源可信分级（与后端 quality.js 对齐） */
+export const TIER_LABEL = { 1: '官方一手', 2: '强策展', 3: '主流媒体', 4: '泛搜索' };
+
+/** 话题证据等级（与后端 evidenceTier 对齐） */
+export const EVIDENCE_TIER_LABEL = {
+  official: '官方一手',
+  media_cross: '多权威媒体交叉',
+  viral_social: '多平台爆款',
+  single_viral: '单平台爆款（孤证）',
+  social_weak: '社交弱信号',
+  weak: '证据不足',
 };

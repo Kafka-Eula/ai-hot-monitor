@@ -160,6 +160,8 @@ export default function Watch({ pollTick, scanning, showToast }) {
                   <div className="hit-meta">
                     {SOURCE_LABEL[h.source] || h.source}
                     {h.author ? ` · ${h.author}` : ''} · {fmtAgo(h.published_at || h.screened_at)}
+                    {h.source_tier === 1 && <span style={{ color: '#34d399' }}> · ✓官方一手</span>}
+                    {h.engagement > 0 && <span> · {Math.round(h.engagement)} 互动</span>}
                     {h.confidence ? <span className="conf"> · 置信 {Math.round(h.confidence * 100)}%</span> : null}
                   </div>
                 </div>

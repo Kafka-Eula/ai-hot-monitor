@@ -1,10 +1,14 @@
 import db from './db.js';
 import { collectAll } from './collectors/index.js';
+import { applyQualityGate, gates } from './quality.js';
 import { screenKeywords } from './ai/screen.js';
 import { clusterTopics } from './ai/cluster.js';
 import { aiReady, aiStatus } from './ai/openrouter.js';
 import { notify } from './notify/index.js';
 import { publish } from './notify/sse.js';
+
+/** 核心源：失败即整轮判失败；其余源尽力而为（偶发限流不致命） */
+const CORE_SOURCES = ['hn', 'hf_papers', 'blog', 'news_search'];
 
 let currentProgress = null; // {phase,done,total} 供轮询兜底
 export function scanProgress() {
@@ -12,8 +16,8 @@ export function scanProgress() {
 }
 
 const insertItem = db.prepare(
-  `INSERT OR IGNORE INTO items(source,url,title,summary,author,published_at,metrics,raw_hash,collected_at)
-   VALUES(@source,@url,@title,@summary,@author,@published_at,@metrics,@raw_hash,@collected_at)`
+  `INSERT OR IGNORE INTO items(source,url,title,summary,author,published_at,metrics,raw_hash,collected_at,quality_score,engagement,source_tier,host,quality_flags)
+   VALUES(@source,@url,@title,@summary,@author,@published_at,@metrics,@raw_hash,@collected_at,@quality_score,@engagement,@source_tier,@host,@quality_flags)`
 );
 
 /** 汇总本轮检索词：启用的关键词 + 各 scope 的 queries */
@@ -49,20 +53,49 @@ export async function runPipeline() {
 
   const { items, stats } = await collectAll(ctx);
 
+  // ---- 质量闸门（AI 之前）：硬门槛 + 质量分 + 同源近似去重，不达标不入库 ----
+  const g = gates();
+  const { passed, blocked } = applyQualityGate(items, { g });
+  const blockedStats = {};
+  for (const b of blocked) {
+    const src = b.item.source;
+    blockedStats[src] ||= { total: 0, reasons: {} };
+    blockedStats[src].total++;
+    const key = b.reason.replace(/\(.*/, '');
+    blockedStats[src].reasons[key] = (blockedStats[src].reasons[key] || 0) + 1;
+  }
+
   // 入库并收集"本轮新条目" id
   let inserted = 0;
   const collectedAt = new Date().toISOString();
   const tx = db.transaction((list) => {
     for (const it of list) {
-      const r = insertItem.run({ ...it, collected_at: collectedAt });
+      const r = insertItem.run({
+        source: it.source,
+        url: it.url,
+        title: it.title,
+        summary: it.summary,
+        author: it.author,
+        published_at: it.published_at,
+        metrics: it.metrics,
+        raw_hash: it.raw_hash,
+        collected_at: collectedAt,
+        quality_score: it.quality_score ?? 0,
+        engagement: it.engagement ?? 0,
+        source_tier: it.source_tier ?? 4,
+        host: it.host ?? '',
+        quality_flags: JSON.stringify(it.quality_flags ?? []),
+      });
       if (r.changes) inserted++;
     }
   });
-  tx(items);
+  tx(passed);
 
-  // 待 AI 处理集合 = 本轮新增 + 历史未处理成功（ai_done=0），上限 150 防积压过大
+  // 待 AI 处理集合：本轮新增 + 历史未处理（ai_done=0）。
+  // 排序按「质量分降序、新优先」——低质量旧积压不再堵住新热点的通知路径；
+  // 上限 40 控制单轮 AI 时长（免费模型每批 25 对约 1~2 分钟，剩余积压下轮继续）。
   const pendingIds = db
-    .prepare('SELECT id FROM items WHERE ai_done=0 ORDER BY id ASC LIMIT 150')
+    .prepare('SELECT id FROM items WHERE ai_done=0 ORDER BY COALESCE(quality_score,0) DESC, id DESC LIMIT 40')
     .all()
     .map((r) => r.id);
 
@@ -94,6 +127,7 @@ export async function runPipeline() {
       const c = await clusterTopics(pendingIds, onProgress);
       ai.topics = c.topics || 0;
       ai.newHot = c.newHot || [];
+      ai.upgraded = c.updated || [];
       for (const id of c.failedIds || []) failedSet.add(id);
     } catch (e) {
       ai.clusterError = `${e.code || ''} ${e.message}`.trim().slice(0, 300);
@@ -125,6 +159,15 @@ export async function runPipeline() {
           link: `/topic/${t.topicId}`,
         });
       }
+      // 证据累积后跨阈值升级的旧话题（此前单源、现在跨源/官方佐证）
+      for (const t of (ai.upgraded || []).slice(0, 3)) {
+        await notify({
+          kind: 'hot_topic',
+          title: `🔥 热点佐证升级（${t.score}分）：${t.title}`,
+          body: (t.summary_zh || t.why_hot || '') + '\n（多源交叉证实后重新达到通知阈值）',
+          link: `/topic/${t.topicId}`,
+        });
+      }
     } catch (e) {
       console.warn('[notify] 分发异常（忽略）:', e.message);
     }
@@ -132,13 +175,20 @@ export async function runPipeline() {
 
   const finishedAt = new Date().toISOString();
   currentProgress = null;
-  const ok = Object.values(stats).every((s) => s.ok) && allQueries.length > 0;
+  // ok 只看核心源（其余为尽力而为源，偶发限流/结构变更不应让整轮判失败）
+  const coreFailed = CORE_SOURCES.filter((s) => !stats[s]?.ok);
+  const ok = allQueries.length > 0 && coreFailed.length === 0;
   const summary = {
     queries: allQueries.length,
     fetched: items.length,
+    blocked: blocked.length,
+    blockedStats,
+    passed: passed.length,
     inserted,
-    duplicates: items.length - inserted,
+    duplicates: passed.length - inserted,
+    gates: { minQuality: g.minQuality, hnPoints: g.hnPoints, hfUpvotes: g.hfUpvotes, dedup: g.dedupEnabled },
     sources: stats,
+    coreFailed,
     ai: {
       skipped: ai.skipped,
       reason: ai.reason,

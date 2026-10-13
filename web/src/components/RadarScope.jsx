@@ -4,9 +4,15 @@ import { SOURCE_LABEL } from '../lib/api.js';
 export const SRC_COLOR = {
   hn: '#fb923c',
   gh_trending: '#38bdf8',
+  gh_search: '#0ea5e9',
   hf_papers: '#a78bfa',
   blog: '#34d399',
   web_search: '#fbbf24',
+  news_search: '#f472b6',
+  cn_search: '#facc15',
+  cn_media: '#ef4444',
+  lobsters: '#c084fc',
+  reddit: '#ff4500',
   twitter: '#e879f9',
 };
 

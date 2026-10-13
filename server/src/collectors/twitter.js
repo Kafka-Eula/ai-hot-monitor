@@ -33,7 +33,7 @@ export async function collect(ctx) {
           summary: (t.text || '').slice(0, 800),
           author: t.user?.screenName ? `@${t.user.screenName}` : '',
           published_at: t.createdAt,
-          metrics: { likes: t.likeCount, rts: t.retweetCount, views: t.viewCount },
+          metrics: { likes: t.likeCount, rts: t.retweetCount, views: t.viewCount, replies: t.replyCount },
         });
         if (it) {
           out.push(it);

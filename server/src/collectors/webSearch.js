@@ -13,8 +13,9 @@ export async function collect(ctx) {
     const q = queries[i];
     const term = /ai/i.test(q) ? q : `${q} AI`;
     try {
+      // df=w：只看最近一周，配合质量层域名门槛过滤陈旧内容
       const html = await fetchText(
-        `https://html.duckduckgo.com/html/?q=${encodeURIComponent(term)}`,
+        `https://html.duckduckgo.com/html/?q=${encodeURIComponent(term)}&df=w`,
         { timeout: 15000 }
       );
       const $ = cheerio.load(html);

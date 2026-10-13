@@ -1,18 +1,20 @@
 import db, { getSetting } from '../db.js';
 import { config } from '../config.js';
 import { chatJSON } from './openrouter.js';
+import { isOfficialHost, isOfficialAnnouncement, normalizeHost } from '../quality.js';
 
 const SYSTEM = `你是 AI 领域热点分析师。用户给出监控关键词和若干条从不同信息源抓到的内容。
+每条附带证据字段：src=信息源、tier=来源分级(1官方一手/2强策展/3主流媒体/4泛搜索UGC)、host=域名、eng=互动数(点赞/评论/星)。
 对每个【关键词 × 内容】组合判断：
-1. relevant：内容是否实质讨论该关键词所指的产品/事件/技术本身。蹭词（仅在标题或无关上下文提及）、营销软文、教程堆砌、与关键词无关 → false。
+1. relevant：内容是否实质讨论该关键词所指的产品/事件/技术本身。蹭词（仅在标题或无关上下文提及）、营销软文、教程堆砌、排行/横评/导航类聚合页、与关键词无关 → false。
 2. genuine：内容描述的信息是否真实可信。**判定依据是来源可信度与交叉佐证，绝不是你自己的记忆**：
-   - src=blog 是厂商官方博客 RSS（一手官宣，视为权威真实）；
-   - 域名属于厂商官方（openai.com、anthropic.com、blog.google、huggingface.co、deepmind.google、mistral.ai、meta.com、ai.meta.com 等）视为一手来源；
-   - src=hn/github 等社区讨论：作为"该事件被广泛讨论"的佐证，可信度中等；
+   - tier=1（官方博客/官方域名）视为一手权威真实；
+   - tier=3 权威媒体（host 在 reuters/theverge/techcrunch/量子位 等名单）转述 → 可信度较高；
+   - src=hn/lobsters/reddit 等社区讨论且 eng 高：作为"该事件被广泛讨论"的佐证，可信度中等；eng 极低（<5）的社区帖只是个人随手发，不能作为发布佐证；
    - **第三方转述型站点（SEO 站、内容农场、云厂商博客、"泄露/爆料"文、模型目录站）若理由中出现"未见官方/缺乏官方/无官方佐证/传闻"等措辞，genuine 必须为 false**——不得一边说没佐证一边放行；
    - 仅营销号、无官方佐证、内容自相矛盾 → false。
 3. confidence：0~1，对 above 两项结论的把握。
-4. reason：一句话中文理由（≤60字），需具体，说明判定依据。
+4. reason：一句话中文理由（≤60字），需具体，引用 tier/host/eng 等给定证据说明判定依据。
 只输出 JSON，格式：{"results":[{"k":关键词序号,"i":内容序号,"relevant":true,"genuine":true,"confidence":0.9,"reason":"..."}]}
 必须为每个组合都给出结果。`;
 
@@ -23,19 +25,8 @@ function dateNote() {
 严禁以"该产品在我的知识中不存在"为由判定为虚假；一律以给定来源与佐证为准。\n\n`;
 }
 
-/** 官方一手来源域名（用于代码层兜底判定） */
-const OFFICIAL_HOSTS = [
-  'openai.com', 'anthropic.com', 'claude.com', 'blog.google', 'deepmind.google',
-  'huggingface.co', 'meta.com', 'ai.meta.com', 'mistral.ai', 'cohere.com', 'x.ai',
-  'microsoft.com', 'developers.openai.com',
-];
 function isOfficialUrl(url) {
-  try {
-    const h = new URL(url).hostname.toLowerCase();
-    return OFFICIAL_HOSTS.some((d) => h === d || h.endsWith('.' + d));
-  } catch {
-    return false;
-  }
+  return isOfficialHost(normalizeHost(url));
 }
 
 const schema = {
@@ -85,7 +76,7 @@ export async function screenKeywords(newItemIds, onProgress) {
   const placeholders = newItemIds.map(() => '?').join(',');
   const items = db
     .prepare(
-      `SELECT id, source, title, summary, author, url, published_at FROM items WHERE id IN (${placeholders})`
+      `SELECT id, source, title, summary, author, url, published_at, host, engagement, source_tier, quality_score FROM items WHERE id IN (${placeholders})`
     )
     .all(...newItemIds);
 
@@ -133,6 +124,10 @@ export async function screenKeywords(newItemIds, onProgress) {
           source: it.source,
           url: (it.url || '').slice(0, 160),
           author: it.author,
+          // 证据字段：tier=1 官方一手；eng=互动数；host 已在权威/官方名单则可信度上调
+          tier: it.source_tier,
+          eng: it.engagement,
+          host: it.host,
         })),
         pairs: batch.map((p) => ({ k: kws.indexOf(p.kw.term), i: p.it.id })),
       });
@@ -155,7 +150,10 @@ export async function screenKeywords(newItemIds, onProgress) {
       let genuine = Boolean(r.genuine);
       // 兜底：AI 理由自曝"无官方佐证"而来源又非官方 → 强制降级（模型常言行不一）
       if (genuine) {
-        const official = item.source === 'blog' || isOfficialUrl(item.url || '');
+        const official =
+          item.source_tier === 1 ||
+          isOfficialAnnouncement(item.source, item.host || normalizeHost(item.url || '')) ||
+          isOfficialUrl(item.url || '');
         const hedge = /未见官方|缺乏官方|无官方|没有官方|未见权威|缺乏佐证|无佐证|未经证实|传闻|爆料|泄露|无法证实|存疑/.test(r.reason || '');
         if (!official && hedge) {
           genuine = false;

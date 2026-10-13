@@ -132,6 +132,19 @@ CREATE TABLE IF NOT EXISTS scans (
 // 迁移：旧库补列
 const cols = db.prepare("PRAGMA table_info(items)").all().map((c) => c.name);
 if (!cols.includes('ai_done')) db.exec('ALTER TABLE items ADD COLUMN ai_done INTEGER DEFAULT 0');
+if (!cols.includes('quality_score')) db.exec('ALTER TABLE items ADD COLUMN quality_score REAL DEFAULT 0');
+if (!cols.includes('engagement')) db.exec('ALTER TABLE items ADD COLUMN engagement REAL DEFAULT 0');
+if (!cols.includes('source_tier')) db.exec('ALTER TABLE items ADD COLUMN source_tier INTEGER DEFAULT 4');
+if (!cols.includes('host')) db.exec("ALTER TABLE items ADD COLUMN host TEXT DEFAULT ''");
+if (!cols.includes('quality_flags')) db.exec("ALTER TABLE items ADD COLUMN quality_flags TEXT DEFAULT '[]'");
+db.exec('CREATE INDEX IF NOT EXISTS idx_items_quality ON items(quality_score)');
+
+const tcols = db.prepare("PRAGMA table_info(topics)").all().map((c) => c.name);
+if (!tcols.includes('source_count')) db.exec('ALTER TABLE topics ADD COLUMN source_count INTEGER DEFAULT 1');
+if (!tcols.includes('host_count')) db.exec('ALTER TABLE topics ADD COLUMN host_count INTEGER DEFAULT 1');
+if (!tcols.includes('has_official')) db.exec('ALTER TABLE topics ADD COLUMN has_official INTEGER DEFAULT 0');
+if (!tcols.includes('viral_count')) db.exec('ALTER TABLE topics ADD COLUMN viral_count INTEGER DEFAULT 0');
+if (!tcols.includes('evidence_tier')) db.exec("ALTER TABLE topics ADD COLUMN evidence_tier TEXT DEFAULT ''");
 
 // ---------- settings helpers ----------
 const getStmt = db.prepare('SELECT value FROM settings WHERE key=?');

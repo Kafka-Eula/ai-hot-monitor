@@ -60,7 +60,7 @@ api.delete('/keywords/:id', (req, res) => {
 api.get('/keywords/:id/hits', (req, res) => {
   const rows = db
     .prepare(
-      `SELECT h.*, i.title, i.url, i.source, i.published_at, i.summary
+      `SELECT h.*, i.title, i.url, i.source, i.published_at, i.summary, i.host, i.engagement, i.source_tier, i.quality_score
        FROM hits h JOIN items i ON i.id=h.item_id
        WHERE h.keyword_id=? ORDER BY h.screened_at DESC LIMIT 200`
     )
@@ -109,14 +109,15 @@ api.get('/topics', (req, res) => {
 api.get('/items', (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 120, 300);
   const since = req.query.since; // ISO
+  const cols = 'id,source,url,title,author,published_at,collected_at,metrics,quality_score,engagement,source_tier,host';
   const rows = since
     ? db
-        .prepare('SELECT id,source,url,title,author,published_at,collected_at,metrics FROM items WHERE collected_at>=? ORDER BY id DESC LIMIT ?')
+        .prepare(`SELECT ${cols} FROM items WHERE collected_at>=? ORDER BY id DESC LIMIT ?`)
         .all(since, limit)
     : db
-        .prepare('SELECT id,source,url,title,author,published_at,collected_at,metrics FROM items ORDER BY id DESC LIMIT ?')
+        .prepare(`SELECT ${cols} FROM items ORDER BY id DESC LIMIT ?`)
         .all(limit);
-  const bySource = db.prepare('SELECT source, COUNT(*) c FROM items GROUP BY source').all();
+  const bySource = db.prepare('SELECT source, COUNT(*) c, ROUND(AVG(quality_score),1) avg_quality FROM items GROUP BY source').all();
   res.json({ rows: rows.map((r) => ({ ...r, metrics: JSON.parse(r.metrics || '{}') })), bySource });
 });
 

@@ -7,7 +7,11 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "test": "node --test test/"
+    "test": "node --test test/quality.test.js test/cnDate.test.js",
+    "test:collectors": "node test/collectors.test.js",
+    "test:pipeline": "node test/pipeline.test.js",
+    "backfill": "node scripts/backfill.mjs",
+    "backfill:dry": "node scripts/backfill.mjs --dry-run"
   },
   "dependencies": {
     "cheerio": "^1.0.0",

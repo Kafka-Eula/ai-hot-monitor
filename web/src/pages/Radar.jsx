@@ -55,7 +55,7 @@ export default function Radar({ scanning, scanInfo, pollTick, progress, onOpenTo
             </div>
             <h1 className="hero-title title-gradient">AI 热点雷达</h1>
             <p className="hero-sub">
-              六路信息源实时嗅探 · AI 甄别假冒内容 · 聚类评分推送 —— 让你永远站在吃瓜第一线。
+              十路信息源实时嗅探 · 质量门槛过滤噪音 · AI 甄别与多源佐证评分 —— 让你永远站在吃瓜第一线。
             </p>
 
             <div className="hud-stats">
@@ -159,9 +159,15 @@ function ScanButton({ scanning, showToast }) {
 const SRC_COLOR = {
   hn: '#fb923c',
   gh_trending: '#38bdf8',
+  gh_search: '#0ea5e9',
   hf_papers: '#a78bfa',
   blog: '#34d399',
   web_search: '#fbbf24',
+  news_search: '#f472b6',
+  cn_search: '#facc15',
+  cn_media: '#ef4444',
+  lobsters: '#c084fc',
+  reddit: '#ff4500',
   twitter: '#e879f9',
 };
 
@@ -170,6 +176,10 @@ function TopicCard({ t, items, onOpen, rank }) {
   const mine = items.filter((i) => ids.has(i.id));
   const srcs = [...new Set(mine.map((i) => i.source))];
   const hot = t.score >= 80;
+  const srcCount = t.source_count || srcs.length || 1;
+  const official = t.has_official || srcs.includes('blog');
+  const viral = t.viral_count || 0;
+  const tier = t.evidence_tier || '';
   // Bento 错落：Top1 占双列双行，其余按节奏分布
   const span =
     rank === 0
@@ -196,6 +206,35 @@ function TopicCard({ t, items, onOpen, rank }) {
         </div>
       </div>
       <div className="bento-foot">
+        {srcCount >= 2 && (
+          <span className="chip" style={{ borderColor: '#3ef2a566', color: '#3ef2a5' }} title="多源交叉证实">
+            ⛓ {srcCount} 源
+          </span>
+        )}
+        {official && (
+          <span className="chip" style={{ borderColor: '#34d39966', color: '#34d399' }} title="含官方一手来源">
+            ✓ 官方
+          </span>
+        )}
+        {tier === 'media_cross' && !official && (
+          <span className="chip" style={{ borderColor: '#38bdf866', color: '#38bdf8' }} title="≥2 家权威媒体交叉报道">
+            📰 媒体交叉
+          </span>
+        )}
+        {viral >= 2 && (
+          <span className="chip" style={{ borderColor: '#e879f966', color: '#e879f9' }} title={`${viral} 条社交平台爆款（点赞/转发/评论达门槛）`}>
+            🔥 {viral} 源爆款
+          </span>
+        )}
+        {srcCount === 1 && !official && viral < 2 && (
+          <span
+            className="chip"
+            style={{ borderColor: '#fbbf2455', color: '#fbbf24' }}
+            title={viral === 1 ? '单条社交爆款，孤证暂不通知，热度封顶 65' : '单一来源且未达爆款门槛，热度已封顶'}
+          >
+            {viral === 1 ? '爆款·孤证' : '单源'}
+          </span>
+        )}
         {srcs.map((s) => (
           <span key={s} className="chip src" style={{ borderColor: SRC_COLOR[s] + '66', color: SRC_COLOR[s] }}>
             {SOURCE_LABEL[s] || s}

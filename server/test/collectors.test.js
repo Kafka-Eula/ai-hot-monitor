@@ -5,6 +5,7 @@
 import '../src/config.js';
 import { SOURCES } from '../src/collectors/index.js';
 import { normItem } from '../src/collectors/normalize.js';
+import { applyQualityGate, gates } from '../src/quality.js';
 
 const ctx = {
   allQueries: ['GPT-6', 'Claude', 'AI 编程', 'Llama'],
@@ -14,12 +15,16 @@ const ctx = {
 };
 
 let total = 0;
+const allItems = [];
 for (const s of SOURCES) {
   const t0 = Date.now();
   console.log(`\n=== ${s.name} ===`);
   try {
     const items = (await s.fn(ctx)) || [];
     total += items.length;
+    for (const it of items) {
+      allItems.push({ ...it, id: allItems.length + 1 });
+    }
     console.log(`  -> ${items.length} 条 (${Date.now() - t0}ms)`);
     for (const it of items.slice(0, 3)) {
       console.log(`   · [${it.source}] ${it.title.slice(0, 80)}`);
@@ -27,6 +32,20 @@ for (const s of SOURCES) {
   } catch (e) {
     console.log(`  !! 失败: ${e.message}`);
   }
+}
+
+// 质量闸门
+const { passed, blocked } = applyQualityGate(allItems, { g: gates() });
+console.log(`\n=== 质量闸门 ===`);
+console.log(`通过 ${passed.length} / 拦截 ${blocked.length}`);
+const byReason = {};
+for (const b of blocked) {
+  const k = `${b.item.source}:${b.reason.replace(/\(.*/, '')}`;
+  byReason[k] = (byReason[k] || 0) + 1;
+}
+console.log('拦截分布:', JSON.stringify(byReason));
+for (const p of passed.slice(0, 6)) {
+  console.log(`   ✓ [${p.source}|q=${p.quality_score}|eng=${p.engagement}|t${p.source_tier}] ${p.title.slice(0, 55)}`);
 }
 
 // 去重验证

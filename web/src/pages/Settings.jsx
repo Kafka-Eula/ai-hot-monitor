@@ -26,6 +26,11 @@ export default function Settings({ refreshScan, showToast }) {
   const [cron, setCron] = useState('*/30 * * * *');
   const [minConf, setMinConf] = useState(0.6);
   const [minScore, setMinScore] = useState(70);
+  const [gates, setGates] = useState({
+    hnPoints: 30, hnComments: 15, hfUpvotes: 30, ghStarsToday: 50,
+    ghSearchStars: 100, redditScore: 200, lobstersScore: 20, twitterLikes: 50, minQuality: 60, maxAgeDays: 14,
+    authHn: 100, authReddit: 800, authTwitter: 500, authLobsters: 80, authGhTrending: 500, authGhSearch: 500, authHfPapers: 150,
+  });
   const [emailOn, setEmailOn] = useState(true);
   const [pushOn, setPushOn] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -40,6 +45,26 @@ export default function Settings({ refreshScan, showToast }) {
       setModel(s['openrouter.model'] || '');
       setMinConf(s['thresholds.minConfidence'] ?? 0.6);
       setMinScore(s['thresholds.minTopicScore'] ?? 70);
+      setGates((gv) => ({
+        ...gv,
+        hnPoints: s['gates.hnPoints'] ?? gv.hnPoints,
+        hnComments: s['gates.hnComments'] ?? gv.hnComments,
+        hfUpvotes: s['gates.hfUpvotes'] ?? gv.hfUpvotes,
+        ghStarsToday: s['gates.ghStarsToday'] ?? gv.ghStarsToday,
+        ghSearchStars: s['gates.ghSearchStars'] ?? gv.ghSearchStars,
+        redditScore: s['gates.redditScore'] ?? gv.redditScore,
+        lobstersScore: s['gates.lobstersScore'] ?? gv.lobstersScore,
+        twitterLikes: s['gates.twitterLikes'] ?? gv.twitterLikes,
+        minQuality: s['gates.minQuality'] ?? gv.minQuality,
+        maxAgeDays: s['gates.maxAgeDays'] ?? gv.maxAgeDays,
+        authHn: s['gates.authHn'] ?? gv.authHn,
+        authReddit: s['gates.authReddit'] ?? gv.authReddit,
+        authTwitter: s['gates.authTwitter'] ?? gv.authTwitter,
+        authLobsters: s['gates.authLobsters'] ?? gv.authLobsters,
+        authGhTrending: s['gates.authGhTrending'] ?? gv.authGhTrending,
+        authGhSearch: s['gates.authGhSearch'] ?? gv.authGhSearch,
+        authHfPapers: s['gates.authHfPapers'] ?? gv.authHfPapers,
+      }));
       setEmailOn(s['notify.email.enabled'] !== false);
       setPushOn(s['notify.webpush.enabled'] !== false);
     }).catch(() => {});
@@ -208,6 +233,68 @@ export default function Settings({ refreshScan, showToast }) {
       </div>
 
       <div className="section">
+        <div className="section-title">质量门槛 // 噪音拦截（低于门槛的条目不入库）</div>
+        <div className="set-grid">
+          <div className="panel">
+            <div className="panel-h"><h3>互动硬门槛</h3></div>
+            <div className="hint" style={{ marginBottom: 10 }}>
+              互动数按传播力<b>加权</b>计算（如 X：点赞 + 转发×3 + 评论×2 + log₁₀浏览×10；HN：分数 + 评论×1.5），跨源可比。
+              未达入库门槛直接拦截；达<b>爆款门槛</b>的社交条目才算"事件被广泛讨论"，可解锁更高话题分数。
+            </div>
+            <div className="field">
+              <label>入库门槛 / 爆款门槛（加权互动分）</label>
+            </div>
+            <GatePairRow label="Hacker News" entry="hnPoints" auth="authHn" v={gates} set={setGates} />
+            <GatePairRow label="X / Twitter" entry="twitterLikes" auth="authTwitter" v={gates} set={setGates} />
+            <GatePairRow label="Lobsters" entry="lobstersScore" auth="authLobsters" v={gates} set={setGates} />
+            <GatePairRow label="GitHub Trending（当日新增星）" entry="ghStarsToday" auth="authGhTrending" v={gates} set={setGates} />
+            <GatePairRow label="GitHub 新库（stars+forks×2）" entry="ghSearchStars" auth="authGhSearch" v={gates} set={setGates} />
+            <GatePairRow label="HF Papers（upvotes）" entry="hfUpvotes" auth="authHfPapers" v={gates} set={setGates} />
+            <div className="field">
+              <label>HN 评论数兜底（评论再多也算深度讨论）</label>
+              <input type="number" min="0" value={gates.hnComments} onChange={(e) => setGates({ ...gates, hnComments: Number(e.target.value) })} />
+            </div>
+            <button
+              className="btn"
+              disabled={saving}
+              onClick={() => {
+                const patch = {};
+                for (const [k, val] of Object.entries(gates)) patch[`gates.${k}`] = Number(val);
+                save(patch);
+              }}
+            >
+              保存互动门槛
+            </button>
+          </div>
+          <div className="panel">
+            <div className="panel-h"><h3>综合质量分门槛</h3></div>
+            <div className="field">
+              <label>无互动数据源（新闻/官宣/搜索）最低质量分（0~100）</label>
+              <input type="number" min="0" max="100" value={gates.minQuality} onChange={(e) => setGates({ ...gates, minQuality: Number(e.target.value) })} />
+              <div className="hint">
+                由「源分级 + 域名权威 + 新鲜度 − 农场/营销惩罚」算出。当前 {gates.minQuality}，越高越严格（默认 60）。
+              </div>
+            </div>
+            <div className="field">
+              <label>最大时效（天）· 发布超过该天数的内容一律拦截</label>
+              <input type="number" min="1" max="90" value={gates.maxAgeDays} onChange={(e) => setGates({ ...gates, maxAgeDays: Number(e.target.value) })} />
+              <div className="hint">修复"7 月的旧帖又被抓进来"。GitHub Trending / HF 每日论文为快照榜源，不受此限。当前 {gates.maxAgeDays} 天。</div>
+            </div>
+            <button className="btn" disabled={saving} onClick={() => save({ 'gates.minQuality': gates.minQuality, 'gates.maxAgeDays': gates.maxAgeDays })}>
+              保存质量分门槛
+            </button>
+            <div className="hint" style={{ marginTop: 12 }}>
+              话题分数受<strong>证据分级封顶</strong>：
+              官方一手 / ≥2 家权威媒体交叉 → 不封顶（100，可通知）；
+              纯社交但 ≥2 条达爆款门槛 → 封顶 80（可通知）；
+              单条爆款孤证 → 65；未达爆款门槛 → 60（均不通知）。
+              同源近似标题自动去重，避免刷屏挤占 AI 预算。
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="section">
         <div className="section-title">通知渠道</div>
         <div className="set-grid">
           <div className="panel">
@@ -279,6 +366,34 @@ export default function Settings({ refreshScan, showToast }) {
   );
 }
 
+function GateRow({ label, k, v, set }) {
+  return (
+    <div className="field">
+      <label>{label}</label>
+      <input
+        type="number"
+        min="0"
+        value={v[k]}
+        onChange={(e) => set({ ...v, [k]: Number(e.target.value) })}
+      />
+    </div>
+  );
+}
+
+/** 一行两个输入：入库门槛 + 爆款（权威）门槛 */
+function GatePairRow({ label, entry, auth, v, set }) {
+  const on = (k) => (e) => set({ ...v, [k]: Number(e.target.value) });
+  return (
+    <div className="field">
+      <label>{label}</label>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <input type="number" min="0" value={v[entry]} onChange={on(entry)} style={{ flex: 1 }} title="入库门槛" />
+        <input type="number" min="0" value={v[auth]} onChange={on(auth)} style={{ flex: 1 }} title="爆款门槛" />
+      </div>
+    </div>
+  );
+}
+
 function SourceStatus() {
   const [info, setInfo] = useState(null);
   useEffect(() => {
@@ -286,15 +401,25 @@ function SourceStatus() {
     const t = setInterval(() => api.scanStatus().then(setInfo).catch(() => {}), 30000);
     return () => clearInterval(t);
   }, []);
-  const last = info?.lastScan?.stats?.sources;
+  const stats = info?.lastScan?.stats;
+  const last = stats?.sources;
   if (!last) return <span className="hint">暂无扫描记录</span>;
+  const blocked = stats.blockedStats || {};
   return (
-    <div className="src-legend" style={{ fontSize: 12 }}>
-      {Object.entries(last).map(([k, v]) => (
-        <span key={k} style={{ color: v.ok ? 'var(--cyan)' : 'var(--red)' }}>
-          {k} {v.ok ? `✓ ${v.count ?? 0}` : '✗'} {v.ms}ms
-        </span>
-      ))}
-    </div>
+    <>
+      <div className="hint" style={{ marginBottom: 10 }}>
+        本轮抓取 <b style={{ color: 'var(--cyan)' }}>{stats.fetched ?? 0}</b> 条 →
+        质量拦截 <b style={{ color: 'var(--amber, #fbbf24)' }}>{stats.blocked ?? 0}</b> 条 →
+        入库 <b style={{ color: '#3ef2a5' }}>{stats.passed ?? 0}</b> 条（新增 {stats.inserted ?? 0}）
+      </div>
+      <div className="src-legend" style={{ fontSize: 12 }}>
+        {Object.entries(last).map(([k, v]) => (
+          <span key={k} style={{ color: v.ok ? 'var(--cyan)' : 'var(--red)' }}>
+            {k} {v.ok ? `✓ ${v.count ?? 0}` : '✗'}
+            {blocked[k]?.total ? `（拦 ${blocked[k].total}）` : ''} {v.ms}ms
+          </span>
+        ))}
+      </div>
+    </>
   );
 }

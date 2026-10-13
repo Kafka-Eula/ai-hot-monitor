@@ -67,6 +67,26 @@ export const SETTING_KEYS = [
   'notify.email.enabled',
   'notify.webpush.enabled',
   'twitter.maxCallsPerScan',
+  // 质量门槛（gates.*，见 server/src/quality.js DEFAULT_GATES）
+  'gates.hnPoints',
+  'gates.hnComments',
+  'gates.hfUpvotes',
+  'gates.ghStarsToday',
+  'gates.ghSearchStars',
+  'gates.redditScore',
+  'gates.lobstersScore',
+  'gates.twitterLikes',
+  'gates.authHn',
+  'gates.authReddit',
+  'gates.authTwitter',
+  'gates.authLobsters',
+  'gates.authGhTrending',
+  'gates.authGhSearch',
+  'gates.authHfPapers',
+  'gates.minQuality',
+  'gates.maxAgeDays',
+  'gates.dedupThreshold',
+  'gates.dedupEnabled',
 ];
 
 export default config;

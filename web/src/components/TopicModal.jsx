@@ -1,12 +1,18 @@
 import { useEffect, useState } from 'react';
-import { api, fmtAgo, SOURCE_LABEL } from '../lib/api.js';
+import { api, fmtAgo, SOURCE_LABEL, EVIDENCE_TIER_LABEL } from '../lib/api.js';
 
 const SRC_COLOR = {
   hn: '#fb923c',
   gh_trending: '#38bdf8',
+  gh_search: '#0ea5e9',
   hf_papers: '#a78bfa',
   blog: '#34d399',
   web_search: '#fbbf24',
+  news_search: '#f472b6',
+  cn_search: '#facc15',
+  cn_media: '#ef4444',
+  lobsters: '#c084fc',
+  reddit: '#ff4500',
   twitter: '#e879f9',
 };
 
@@ -51,8 +57,13 @@ export default function TopicModal({ id, onClose }) {
               </div>
               <div>
                 <h2>{t.title}</h2>
-                <div className="hit-meta" style={{ marginTop: 2 }}>
-                  首次发现 {fmtAgo(t.first_seen)} · 最近更新 {fmtAgo(t.last_updated)}
+                <div className="hit-meta" style={{ marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span>{(t.source_count || 1) >= 2 ? `⛓ 跨 ${t.source_count} 源` : '单一来源'}</span>
+                  {!!t.has_official && <span style={{ color: '#34d399' }}>✓ 含官方一手</span>}
+                  {!!t.viral_count && <span style={{ color: '#e879f9' }}>🔥 {t.viral_count} 条社交爆款</span>}
+                  {t.evidence_tier && <span style={{ opacity: 0.75 }}>证据档: {EVIDENCE_TIER_LABEL[t.evidence_tier] || t.evidence_tier}</span>}
+                  <span>首次 {fmtAgo(t.first_seen)}</span>
+                  <span>更新 {fmtAgo(t.last_updated)}</span>
                 </div>
               </div>
             </div>
@@ -81,6 +92,8 @@ export default function TopicModal({ id, onClose }) {
                     <div className="hit-meta">
                       <span style={{ color: SRC_COLOR[i.source] }}>■</span> {SOURCE_LABEL[i.source] || i.source}
                       {i.author ? ` · ${i.author}` : ''} · {fmtAgo(i.published_at || i.collected_at)}
+                      {i.engagement > 0 && <span style={{ color: '#3ef2a5' }}> · {Math.round(i.engagement)} 互动</span>}
+                      {i.quality_score > 0 && <span> · 质量 {Math.round(i.quality_score)}</span>}
                     </div>
                   </div>
                 </div>
