@@ -2,8 +2,10 @@ const j = (r) => {
   if (!r.ok) return r.json().then((b) => Promise.reject(new Error(b.error || r.status)));
   return r.json();
 };
-const opt = (body) => ({
-  method: 'POST',
+// 注意：method 必须放在返回值里由参数决定，而不是让调用方 `{ method:'PUT', ...opt() }`
+// 那样展开——spread 在后会把前面的 method 覆盖回 POST（正是这个 bug 让保存设置一直 404）。
+const opt = (body, method = 'POST') => ({
+  method,
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify(body),
 });
@@ -13,7 +15,7 @@ export const api = {
   keywords: () => fetch('/api/keywords').then(j),
   addKeyword: (term) => fetch('/api/keywords', opt({ term })).then(j),
   delKeyword: (id) => fetch(`/api/keywords/${id}`, { method: 'DELETE' }).then(j),
-  patchKeyword: (id, enabled) => fetch(`/api/keywords/${id}`, opt({ enabled })).then(j).catch(() => fetch(`/api/keywords/${id}`, { method: 'PATCH', ...opt({ enabled }) }).then(j)),
+  patchKeyword: (id, enabled) => fetch(`/api/keywords/${id}`, opt({ enabled }, 'PATCH')).then(j),
   hits: (id) => fetch(`/api/keywords/${id}/hits`).then(j),
 
   scopes: () => fetch('/api/scopes').then(j),
@@ -45,7 +47,7 @@ export const api = {
   aiModels: () => fetch('/api/ai/models').then(j),
   notifyStatus: () => fetch('/api/notify/status').then(j),
   settings: () => fetch('/api/settings').then(j),
-  saveSettings: (obj) => fetch('/api/settings', { method: 'PUT', ...opt(obj) }).then(j),
+  saveSettings: (obj) => fetch('/api/settings', opt(obj, 'PUT')).then(j),
   pushKey: () => fetch('/api/push/public-key').then(j),
   pushSubscribe: (sub) => fetch('/api/push/subscribe', opt(sub)).then(j),
   pushTest: () => fetch('/api/push/test', { method: 'POST' }).then(j),
