@@ -20,7 +20,18 @@ export const api = {
   addScope: (label) => fetch('/api/scopes', opt({ label })).then(j),
   delScope: (id) => fetch(`/api/scopes/${id}`, { method: 'DELETE' }).then(j),
 
-  topics: (limit = 50) => fetch(`/api/topics?limit=${limit}`).then(j),
+  topics: (params = {}) => {
+    const qs = new URLSearchParams();
+    // view / expandWeak 是纯前端状态，不参与查询
+    for (const [k, v] of Object.entries(params)) {
+      if (k === 'view' || k === 'expandWeak') continue;
+      if (v === '' || v == null || v === 'all' || v === 0) continue;
+      if (Array.isArray(v) && !v.length) continue;
+      qs.set(k, Array.isArray(v) ? v.join(',') : v);
+    }
+    if (!qs.has('limit')) qs.set('limit', '10');
+    return fetch(`/api/topics?${qs}`).then(j);
+  },
   topic: (id) => fetch(`/api/topics/${id}`).then(j),
   items: (limit = 150) => fetch(`/api/items?limit=${limit}`).then(j),
 

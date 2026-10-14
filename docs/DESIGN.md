@@ -144,7 +144,10 @@ CREATE TABLE topics (
   -- v1.2 证据字段（代码统计，不依赖 AI 自报；单源非官方 → score 封顶 65）
   source_count INTEGER DEFAULT 1,  -- 跨信息源数
   host_count INTEGER DEFAULT 1,    -- 跨域名数
-  has_official INTEGER DEFAULT 0   -- 是否含官方一手来源
+  has_official INTEGER DEFAULT 0,  -- 是否含官方一手来源
+  viral_count INTEGER DEFAULT 0,   -- 达爆款门槛的社交条目数
+  evidence_tier TEXT DEFAULT '',   -- official|media_cross|viral_social|single_viral|social_weak|weak
+  sources TEXT DEFAULT '[]'        -- v1.3：构成该话题的信息源名 JSON 数组（供筛选/标签）
 );
 -- 通知条件：score >= 阈值 且 (source_count >= 2 或 has_official = 1)
 
@@ -279,7 +282,13 @@ GET  /api/keywords/:id/hits          # 命中历史（含 AI 理由、被过滤�
 # 关注范围
 GET/POST/DELETE /api/scopes[/:id]
 # 热点
-GET  /api/topics?scope=&limit=       # 热点榜（按 score/时间）
+GET  /api/topics?[筛选参数]           # 热点榜：筛选 + 排序 + 分页 + 交叉分面计数
+     #   scope=2|none  tier=strong|weak|official|media_cross|...  sources=blog,hn
+     #   since=24h|3d|7d|30d  min_score=80  sort=score|updated|sources|items  q=关键词
+     #   strong=1（只看强佐证，配合前端"低佐证默认折叠"）  limit(默认10)|offset（分页）
+     #   → { rows, total, offset, limit, facets:{scope,tier,sources,since,weak,total_all}, tier_label, scopes }
+     #   facets 为**交叉分面**：每个维度的计数在"应用其余所有维度"之后统计（标准 faceted search），
+     #   因此选中某条件后，其他维度里"点了会变空"的选项能被识别出来。
 GET  /api/topics/:id                 # 详情：合并的原始条目、来源分布
 # 扫描
 POST /api/scan/run                   # 立即扫描（异步，返回 scanId）
@@ -295,7 +304,22 @@ GET/PUT /api/settings                # 频率、通知阈值、SMTP 开关等
 ## 7. 前端设计（独特性）
 
 风格：**"深空雷达控制台"** —— 暗底、扫描线动画、荧光绿/琥珀信号色、等宽字体点缀。
-- 首页 Radar：左侧话题时间线流（热度=卡片辉光强度），右侧可选"雷达盘"可视化（Canvas 扫描动画，光点=近期条目）。
+- 首页 Radar：话题流（热度=卡片辉光强度）+ 雷达盘可视化（Canvas 扫描动画，光点=近期条目）。
+  **v1.3 检索、排序与分页**（`components/TopicFilters.jsx`）：
+  - 五类条件全部走服务端（`GET /api/topics?...`）：关键词搜索、关注范围、佐证强度、时间窗、信息源，
+    外加热度滑块与四种排序（热度/最新/跨源数/来源条数）；筛选状态存 localStorage。
+  - 排序做成段控按钮（不用原生 select）；五类筛选收进「⚑ 筛选」按钮，展开为**内嵌区域**
+    （撑开检索条而非浮层覆盖卡片），按钮上带已生效条件数徽章。
+  - chip 计数来自后端交叉分面 `facets`（每个维度在应用其余维度后统计），
+    可识别"点了会变空"的选项。
+  - 列表统一**长条形、一行一条**（放弃 Bento 错落，减少视觉跳动）；描述与"为什么火"
+    用低对比中性色并限两行，突出标题与热度分。
+  - 两种视图：平铺 / **按关注范围分组**（列由 scopes 表动态生成，用户增删范围即增减列）。
+  - 低佐证话题（单源/孤证，热度封顶）**默认由服务端过滤掉**（`strong=1`），折叠成一条
+    "还有 N 个低佐证话题"，符合"宁缺毋滥"；用户显式按佐证筛选时不再二次折叠。
+  - **分页每页 10 条**（服务端 limit/offset）：页码首尾常驻 + 邻近页 + 省略号，显示"X–Y / 共 N 条"；
+    筛选变化回到第 1 页，结果集变小时自动回退到末页。
+  - 搜索输入 260ms 防抖；防抖回调用 ref 读最新状态，避免与其他条件互相覆盖。
 - Watch 页：关键词芯片 + 每个关键词的命中流水，AI 理由以"甄别报告"形式展开。
 - 通知：右上铃铛抽屉，SSE 实时。
 - Settings：范围管理、扫描频率、通知三渠道配置表单。

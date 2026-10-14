@@ -1,21 +1,26 @@
 import db, { getSetting } from '../db.js';
 import { config } from '../config.js';
 import { chatJSON } from './openrouter.js';
-import { isOfficialHost, isOfficialAnnouncement, normalizeHost } from '../quality.js';
+import { isOfficialHost, isOfficialAnnouncement, isAuthorityHost, isDeniedHost, normalizeHost } from '../quality.js';
 
-const SYSTEM = `你是 AI 领域热点分析师。用户给出监控关键词和若干条从不同信息源抓到的内容。
-每条附带证据字段：src=信息源、tier=来源分级(1官方一手/2强策展/3主流媒体/4泛搜索UGC)、host=域名、eng=互动数(点赞/评论/星)。
-对每个【关键词 × 内容】组合判断：
-1. relevant：内容是否实质讨论该关键词所指的产品/事件/技术本身。蹭词（仅在标题或无关上下文提及）、营销软文、教程堆砌、排行/横评/导航类聚合页、与关键词无关 → false。
-2. genuine：内容描述的信息是否真实可信。**判定依据是来源可信度与交叉佐证，绝不是你自己的记忆**：
-   - tier=1（官方博客/官方域名）视为一手权威真实；
-   - tier=3 权威媒体（host 在 reuters/theverge/techcrunch/量子位 等名单）转述 → 可信度较高；
-   - src=hn/lobsters/reddit 等社区讨论且 eng 高：作为"该事件被广泛讨论"的佐证，可信度中等；eng 极低（<5）的社区帖只是个人随手发，不能作为发布佐证；
-   - **第三方转述型站点（SEO 站、内容农场、云厂商博客、"泄露/爆料"文、模型目录站）若理由中出现"未见官方/缺乏官方/无官方佐证/传闻"等措辞，genuine 必须为 false**——不得一边说没佐证一边放行；
-   - 仅营销号、无官方佐证、内容自相矛盾 → false。
-3. confidence：0~1，对 above 两项结论的把握。
-4. reason：一句话中文理由（≤60字），需具体，引用 tier/host/eng 等给定证据说明判定依据。
-只输出 JSON，格式：{"results":[{"k":关键词序号,"i":内容序号,"relevant":true,"genuine":true,"confidence":0.9,"reason":"..."}]}
+const SYSTEM = `你是 AI 领域热点分析师。给定监控关键词和若干条来自不同信息源的内容，对每个【关键词 × 内容】组合判断两件事。
+
+每条内容带有**代码预先算好的证据字段**，直接采用，不要自己推测：
+- src=信息源；tier=来源分级(1官方一手/2强策展社区/3主流媒体/4泛搜索UGC)；host=域名；eng=互动数(点赞/评论/星，0 表示无热度)
+- official=1 表示该域名是厂商官方一手来源；auth=1 表示在权威媒体名单内；farm=1 表示内容农场/自媒体转载站（名单判定，无需你识别媒体身份）
+
+1. relevant：是否实质讨论该关键词所指的产品/事件/技术本身。
+   仅在标题蹭词、营销软文、教程堆砌、排行/横评/导航聚合页、与关键词无关 → false。
+2. genuine：所描述信息是否真实可信。判定只看来源与佐证，**不看你自己的知识**：
+   - official=1 或 tier=1 → 一手权威，true；
+   - auth=1 的媒体报道 → 属可信转述，true（"没有官方原文"不等于虚假，权威媒体交叉报道本身就是佐证）；
+   - farm=1，或 tier=4 泛搜索/低热度 UGC 且无 official/auth 来源同题印证 → false；
+   - eng 极低的社区随手帖、纯传闻爆料、内容自相矛盾 → false。
+   注意：不得一边承认"权威媒体报道"一边又以"缺乏官方佐证"判 false，二者矛盾时以 auth 字段为准。
+3. confidence：0~1，对上述两项结论的把握。
+4. reason：一句话中文（≤50字），引用给定证据字段（如"auth=1 澎湃新闻可信转述""farm=1 自媒体转载"），不要复述标题。
+
+只输出 JSON：{"results":[{"k":关键词序号,"i":内容序号,"relevant":true,"genuine":true,"confidence":0.9,"reason":"..."}]}
 必须为每个组合都给出结果。`;
 
 /** 关键：注入当前日期，避免模型用训练截止日期否定真实存在的新产品 */
@@ -117,18 +122,27 @@ export async function screenKeywords(newItemIds, onProgress) {
       dateNote() +
       JSON.stringify({
         keywords: kws,
-        items: its.map((it) => ({
-          i: it.id,
-          title: it.title.slice(0, 200),
-          summary: (it.summary || '').slice(0, 300),
-          source: it.source,
-          url: (it.url || '').slice(0, 160),
-          author: it.author,
-          // 证据字段：tier=1 官方一手；eng=互动数；host 已在权威/官方名单则可信度上调
-          tier: it.source_tier,
-          eng: it.engagement,
-          host: it.host,
-        })),
+        items: its.map((it) => {
+          const h = it.host || normalizeHost(it.url || '');
+          return {
+            i: it.id,
+            title: it.title.slice(0, 200),
+            summary: (it.summary || '').slice(0, 300),
+            source: it.source,
+            url: (it.url || '').slice(0, 160),
+            author: it.author,
+            // 证据字段：tier=1 官方一手；eng=互动数。
+            // host 的权威/官方/农场判定由**代码查名单**得出并直接给出（auth/official/farm），
+            // 不让模型自己猜某域名是否权威——它对中国媒体名单（澎湃/每经/新浪财经等）判断不稳，
+            // 曾把白名单内媒体一律当成"非权威媒体"而误杀。
+            tier: it.source_tier,
+            eng: it.engagement,
+            host: h,
+            official: isOfficialHost(h) ? 1 : 0,
+            auth: isAuthorityHost(h) ? 1 : 0,
+            farm: isDeniedHost(h) ? 1 : 0,
+          };
+        }),
         pairs: batch.map((p) => ({ k: kws.indexOf(p.kw.term), i: p.it.id })),
       });
 
@@ -148,14 +162,18 @@ export async function screenKeywords(newItemIds, onProgress) {
       const item = its.find((x) => x.id === r.i);
       if (!item) continue;
       let genuine = Boolean(r.genuine);
-      // 兜底：AI 理由自曝"无官方佐证"而来源又非官方 → 强制降级（模型常言行不一）
+      // 兜底：AI 理由自曝"无官方佐证"而来源**既非官方也非权威媒体** → 强制降级（模型常言行不一）。
+      // auth=1 的权威媒体可信转述不在此列——新提示词已明确"权威媒体报道本身即佐证"，
+      // 若模型仍写"未见官方"却放行，属于措辞矛盾而非判断错误，不再降级（曾误杀澎湃/每经等）。
       if (genuine) {
-        const official =
+        const h = item.host || normalizeHost(item.url || '');
+        const strong =
           item.source_tier === 1 ||
-          isOfficialAnnouncement(item.source, item.host || normalizeHost(item.url || '')) ||
-          isOfficialUrl(item.url || '');
+          isOfficialAnnouncement(item.source, h) ||
+          isOfficialUrl(item.url || '') ||
+          isAuthorityHost(h);
         const hedge = /未见官方|缺乏官方|无官方|没有官方|未见权威|缺乏佐证|无佐证|未经证实|传闻|爆料|泄露|无法证实|存疑/.test(r.reason || '');
-        if (!official && hedge) {
+        if (!strong && hedge) {
           genuine = false;
           console.log(`[ai] 兜底降级: ${item.title.slice(0, 50)}`);
         }

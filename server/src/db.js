@@ -145,6 +145,8 @@ if (!tcols.includes('host_count')) db.exec('ALTER TABLE topics ADD COLUMN host_c
 if (!tcols.includes('has_official')) db.exec('ALTER TABLE topics ADD COLUMN has_official INTEGER DEFAULT 0');
 if (!tcols.includes('viral_count')) db.exec('ALTER TABLE topics ADD COLUMN viral_count INTEGER DEFAULT 0');
 if (!tcols.includes('evidence_tier')) db.exec("ALTER TABLE topics ADD COLUMN evidence_tier TEXT DEFAULT ''");
+// 话题构成信息源（JSON 数组）：前端按源筛选/展示不再依赖"最近 N 条 items"反推
+if (!tcols.includes('sources')) db.exec("ALTER TABLE topics ADD COLUMN sources TEXT DEFAULT '[]'");
 
 // ---------- settings helpers ----------
 const getStmt = db.prepare('SELECT value FROM settings WHERE key=?');

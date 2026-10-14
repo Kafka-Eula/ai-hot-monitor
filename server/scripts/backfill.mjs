@@ -94,7 +94,7 @@ const topics = db.prepare('SELECT * FROM topics').all();
 const tStats = { updated: 0, deleted: 0, demoted: 0, orphaned: 0 };
 const delTopic = db.prepare('DELETE FROM topics WHERE id=?');
 const updTopic = db.prepare(
-  'UPDATE topics SET score=?, item_ids=?, source_count=?, host_count=?, has_official=?, viral_count=?, evidence_tier=? WHERE id=?'
+  'UPDATE topics SET score=?, item_ids=?, source_count=?, host_count=?, has_official=?, viral_count=?, evidence_tier=?, sources=? WHERE id=?'
 );
 
 db.transaction(() => {
@@ -121,7 +121,7 @@ db.transaction(() => {
       continue;
     }
     tStats.updated++;
-    if (!DRY) updTopic.run(capped.score, JSON.stringify(alive), ev.source_count, ev.host_count, ev.has_official, ev.viral_count, capped.tier, t.id);
+    if (!DRY) updTopic.run(capped.score, JSON.stringify(alive), ev.source_count, ev.host_count, ev.has_official, ev.viral_count, capped.tier, JSON.stringify(ev.sources), t.id);
     if (capped.capped) {
       console.log(`  [demote] ${t.cluster_key}: ${t.score} → ${capped.score} (${capped.tier}: 源${ev.source_count}/域${ev.host_count}/官方${ev.has_official}/爆款${ev.viral_count})`);
     }

@@ -632,6 +632,7 @@ export function evidenceOf(items, g = gates()) {
     authority_media_count: authorityHosts.size,
     viral_count: viralCount,
     social_only: socialOnly ? 1 : 0,
+    sources: [...sources].sort(),
   };
 }
 
