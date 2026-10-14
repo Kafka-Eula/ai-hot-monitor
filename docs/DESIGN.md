@@ -14,7 +14,7 @@
 │                     │                             │                  │
 │              抓取层 collectors               SSE / Web Push / 邮件     │
 │  HN·GitHubTrending·GitHubSearch·HF·官方博客RSS·GoogleNews+Bing·       │
-│  中文媒体RSS·360新闻搜索·Lobsters·twitterapi.io（10源，2026-10精简）   │
+│  中文媒体RSS·360新闻搜索·Lobsters·twitterapi.io·Bilibili（11源）        │
 │                   ↓ 质量闸门(quality.js：硬门槛+质量分+去重) ↓         │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -45,7 +45,8 @@ ai_hot_monitor/
 │  │  │  ├─ lobsters.js     # Lobsters 公开 JSON
 │  │  │  ├─ reddit.js       # Reddit top.rss（尽力而为）
 │  │  │  ├─ twitter.js      # twitterapi.io
-│  │  │  └─ cnSearch.js     # 360 新闻搜索（免 key，中文 AI 新闻）
+│  │  │  ├─ cnSearch.js     # 360 新闻搜索（免 key，中文 AI 新闻）
+│  │  │  └─ bilibili.js     # B站：关键词搜索 + 综合热门（互动数据最全）
 │  │  ├─ util/
 │  │  │  ├─ feed.js         # RSS/Atom 三级降级解析（cheerio→rss-parser→正则）
 │  │  │  └─ cnDate.js       # 中文日期解析（2026年8月13日 / N天前 / 昨天…）
@@ -147,8 +148,18 @@ CREATE TABLE topics (
   has_official INTEGER DEFAULT 0,  -- 是否含官方一手来源
   viral_count INTEGER DEFAULT 0,   -- 达爆款门槛的社交条目数
   evidence_tier TEXT DEFAULT '',   -- official|media_cross|viral_social|single_viral|social_weak|weak
-  sources TEXT DEFAULT '[]'        -- v1.3：构成该话题的信息源名 JSON 数组（供筛选/标签）
-);
+    sources TEXT DEFAULT '[]',       -- v1.3：构成该话题的信息源名 JSON 数组（供筛选/标签）
+    -- v1.4 信息价值速判（省掉"跳去原站核对"）
+    primary_host TEXT DEFAULT '',    -- 最权威来源的真实域名（排序：厂商官方>权威媒体>策展社区）
+    primary_label TEXT DEFAULT '',   -- 品牌名（openai.com→OpenAI 官方 / qbitai.com→量子位）
+    primary_url TEXT DEFAULT '',     -- 最权威来源原文直链（卡片可直达）
+    primary_source TEXT DEFAULT '',
+    primary_tier INTEGER DEFAULT 0,  -- 4官方一手/3权威媒体/2策展社区/1其他（前端徽章配色）
+    authority_count INTEGER DEFAULT 0, -- 官方+权威媒体的**不同域名**数（卡片 "+N"）
+    top_metrics TEXT DEFAULT '{}',   -- 话题内最热条目的**原始**互动指标（{source,url,title,author,values}）
+    published_first TEXT DEFAULT '', -- 话题内最早/最晚的**原始发布时间**（发布轴，区别于 last_updated 聚类时间）
+    published_last TEXT DEFAULT ''
+  );
 -- 通知条件：score >= 阈值 且 (source_count >= 2 或 has_official = 1)
 
 -- 站内通知
@@ -174,7 +185,7 @@ CREATE TABLE scans (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT, finis
 | 源 | 端点/方式 | 频率与额度控制 | 硬门槛（默认） |
 |---|---|---|---|
 | Hacker News | `https://hn.algolia.com/api/v1/search_by_date?query=...&tags=story` | 每关键词 1 次/扫描 | points≥30 或 comments≥15 |
-| GitHub Trending | `https://github.com/trending?since=hourly` cheerio 解析（含 stars today） | 每扫描 1 次 | stars_today≥50 |
+| GitHub Trending | `https://github.com/trending?since=hourly` cheerio 解析（含 stars today）；入库前对**本轮新仓库**调 `api.github.com/repos/:o/:r` 补 `created_at`（限量 20 次/轮，已入库的跳过） | 每扫描 1 次 | stars_today≥50 |
 | GitHub 新库 | `https://api.github.com/search/repositories?q=...+created:>7d&sort=stars` | 每扫描 ≤6 查询，间隔 6.5s（未登录 10 次/分） | stars≥100 |
 | HF Papers | `https://huggingface.co/api/daily_papers` | 每扫描 1 次 | upvotes≥30 |
 | 官方博客 RSS | openai.com/blog、anthropic.com/news、deepmind… `rss-parser` | 每源 1 次/扫描 | —（走质量分） |
@@ -185,6 +196,16 @@ CREATE TABLE scans (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT, finis
 | Lobsters | `https://lobste.rs/t/{ai,ml,programming}.json` | 每扫描 3 请求，间隔 1.2s | score≥20 |
 | ~~Reddit~~ | ~~`https://www.reddit.com/r/{sub}/top.rss?t=day`~~ | **已摘除（2026-10）**：抓取 200 条 → 入库 0 条（429 限流 + 互动门槛全拦）；采集器保留可恢复 | — |
 | Twitter/X | `GET https://api.twitterapi.io/twitter/tweet/advanced_search?query=...&queryType=Latest`，头 `X-API-Key` | 每关键词/scope ≤ 1 次/扫描；未配 key 时自动禁用 | likes≥50 |
+| Bilibili | ① `https://api.bilibili.com/x/web-interface/search/type?search_type=video&keyword=...&order=totalrank`（**需首页 `buvid3` Cookie**）② `https://api.bilibili.com/x/web-interface/popular?ps=50&pn=N` | 搜索 ≤8 次/扫描、间隔 ≥2.5s；热门 ≤2 页、间隔 ≥2s | 加权互动 ≥ biliScore(500)；爆款 ≥ authBili(5000) |
+
+**Bilibili 接入要点（2026-10 实测，修正"B站一律 -352 风控"的旧结论）**
+- 只有**分区排行 `ranking/v2`、`popular/series/one`** 是 `-352`；`search/type` 与 `popular` 可用。
+- `search/type` 缺 Cookie 时返回 `-412 request was banned` → 先抓首页取 `buvid3` 即可正常返回。
+- `order` 实测：`pubdate` 只给刚上传、0 播放的视频（会被互动门槛全拦）；`click` 只给陈年高播放老视频（3 天内 0 条）；
+  **`totalrank`（综合排序）**兼顾热度与新鲜度，采用它。
+- `newlist`（分区最新）可用但新视频 play/like=0，无热度信号，不采用。
+- 搜索结果**不返回 `coin`（投币）**，前端按"有值才显示"处理，不会出现误导性的 0。
+- 综合热门是**全站**榜，按 AI 词表（`AI_TERMS`）本地过滤后才收（实测 100 条 → 12 条 AI 相关）。
 
 - 全局限流：`p-limit` 并发 ≤ 4（各源打不同站点互不限流；单源内部另有自己的节奏）；单源失败仅记录日志；核心源（hn/hf_papers/blog/news_search）失败才判本轮失败。
 - AI 积压控制：待甄别集合按**质量分降序、新优先**取前 40 条（2026-10 改），保证新热点最先出通知，低质量旧积压不堵队。
@@ -199,7 +220,10 @@ CREATE TABLE scans (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT, finis
    `HN = points + comments×1.5`；`Reddit = score + comments×2`；
    `X = likes + rts×3 + replies×2 + log₁₀(views)×10`；`Lobsters = score + comments`；
    `GitHub Trending = stars_today`（**只认当日新增**，总星数不是新闻信号）；
-   `GitHub 新库 = stars + forks×2`；`HF Papers = upvotes`。
+      `GitHub 新库 = stars + forks×2`；`HF Papers = upvotes`；
+      **`Bilibili = like + coin×2 + fav×3 + share×4 + danmaku + reply×1.5 + log₁₀(view)×30`**
+      （投币/收藏/转发比点赞更能代表"值得看/值得传"；播放量取 log 且只占小头，
+      否则百万播放的刷量视频会淹没其他平台信号）。
    每源两级门槛：**入库门槛**（低于则拦截）与**爆款门槛**（达到才算"事件被广泛讨论"，可解锁更高话题分）。
 3. **综合质量分**（非门槛型源）：`tier基础分(0-40) + 互动/策展分(0-30) + 新鲜度(0-15) + 域名权威(0-15) − 惩罚`，低于 `minQuality`（默认 60）拦截。
    惩罚项：内容农场域名、营销/排行/教程标题、**资讯汇总帖**（"早报｜…"、标题内 ≥2 个分号拼多个不相干事件）、无日期、过旧、摘要缺失、标题过短；
@@ -229,6 +253,34 @@ CREATE TABLE scans (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT, finis
 阈值全部走 `settings` 表 `gates.*` 键，设置页可调，下轮扫描生效。
 
 历史数据一次性回填：`npm --workspace server run backfill`（先 `backfill:dry` 预览），自动备份 db。
+v1.4 起该脚本同时重算 `primary_*` / `authority_count` / `top_metrics` / `published_first|last`。
+
+### 3.7 信息价值速判（v1.4：来源精简 + 原始数据露出）
+
+目标：**省掉"跳去原站核对"的时间**。四条展示口径（均已落库、前后端同源）：
+
+1. **来源只显示 1~2 个最权威的**（`summarizeSources()`）：排序为 厂商官方(4) > 权威媒体(3) >
+   策展社区/论文库(2) > 其他(1)；同档按发布时间新→旧、再按域名稳定排序（跨轮次不跳变）。
+   展示**品牌名**（`BRAND_HOSTS`：openai.com→OpenAI 官方、techcrunch.com→TechCrunch、qbitai.com→量子位，
+   未命中回退域名主干），其余折叠为 `+N`（N = `authority_count - 1`，`authority_count` 是
+   官方/权威媒体的**不同域名**数，同一家媒体多篇不虚高）。
+2. **原始发布时间上卡片**：`published_first/last` 来自条目 `published_at`；
+   `last_updated` 是聚类时间（并入新条目就变），**不能**用来判断新旧——"最新"排序与时间窗筛选
+   均已改按发布轴（`axisTime()`）。快照榜源（gh_trending / hf_papers）本身无发布时间 → 如实标注
+   "该源不提供发布时间"；gh_trending 由 `enrichTrendingRepos()` 调 repos API 补 `metrics.created_at`
+   （仅补本轮**首次入库**的仓库，限量 20 次），前端显示"建库于 X"。
+3. **原始互动指标露出**：`top_metrics` 存话题内最热条目的原始指标（不是加权的 engagement 分），
+   **在卡片标签行放首位**——这是"值不值得点开"最快的判据；详情页逐条列出全部指标 + 传播力；
+   新闻/官宣/媒体类**本就没有互动接口**，如实显示"无互动数据"而非 0。
+   指标顺序按源定制（B站：点赞/投币/收藏/转发/评论/弹幕/播放；GitHub 只认当日新增），
+   大数字按中文习惯显示为 万/亿（避免 "1834k" 这种难读形式）。
+4. **平台渠道不冒充一手**：`PLATFORM_HOSTS`（huggingface.co / github.com / bilibili.com / x.com…）不算
+   "谁在说这件事"，**同时豁免内容农场惩罚**（否则接入平台型信息源会自我惩罚——实测 B站条目被扣 25 分）。
+   修复：用户上传的 HF 模型页（`/user/model-model`）曾被当成厂商官宣把话题
+   抬到 90 分「官方一手」（`isOfficialAnnouncement` 增加 UGC 路径判定，`authorityRank` 增至 rank 2，
+   该话题已回落 65 分 weak）；社交条目链接自家站点（X 帖 → x.ai）也只算社交信号。
+
+阈值/口径全部集中在 `quality.js`，无新增配置项。
 
 ### twitterapi.io 对接要点（MCP 已核实，2026-09）
 - Base：`https://api.twitterapi.io`，认证：请求头 `X-API-Key: <key>`（无 OAuth）。
@@ -289,7 +341,14 @@ GET  /api/topics?[筛选参数]           # 热点榜：筛选 + 排序 + 分页
      #   → { rows, total, offset, limit, facets:{scope,tier,sources,since,weak,total_all}, tier_label, scopes }
      #   facets 为**交叉分面**：每个维度的计数在"应用其余所有维度"之后统计（标准 faceted search），
      #   因此选中某条件后，其他维度里"点了会变空"的选项能被识别出来。
+     #   sort=updated 与 since 时间窗均按**原始发布轴**（published_last → 回退 last_updated），
+     #   不再用聚类时间，避免旧闻因今天被讨论而排到最前。
+     #   rows 内每行含 v1.4 速判字段：primary_label/primary_host/primary_tier/authority_count/
+     #   top_metrics{source,url,title,author,values}/published_first/published_last
 GET  /api/topics/:id                 # 详情：合并的原始条目、来源分布
+     #   条目已补充展示字段：metrics(解析后)/labels(徽章)/metric_list/has_published/
+     #   published_at+collected_at(区分发布与收录)/repo_created(GitHub 建库时间)/brand/
+     #   platform_host/author_label/tier_name；条目按发布/采集时间新→旧排列
 # 扫描
 POST /api/scan/run                   # 立即扫描（异步，返回 scanId）
 GET  /api/scan/status                # 上次/下次扫描、各源统计
@@ -320,7 +379,14 @@ GET/PUT /api/settings                # 频率、通知阈值、SMTP 开关等
   - **分页每页 10 条**（服务端 limit/offset）：页码首尾常驻 + 邻近页 + 省略号，显示"X–Y / 共 N 条"；
     筛选变化回到第 1 页，结果集变小时自动回退到末页。
   - 搜索输入 260ms 防抖；防抖回调用 ref 读最新状态，避免与其他条件互相覆盖。
-- Watch 页：关键词芯片 + 每个关键词的命中流水，AI 理由以"甄别报告"形式展开。
+  - **v1.4 信息价值速判**（省跳站核对，见 §3.7）：
+    - 卡片只挂 **1 个最权威来源**（品牌名，配色区分官方绿/媒体蓝）+ `+N` 折叠其余权威来源；
+      显示话题内最热条目的原始互动（`▲139 💬92`）与 **首发时间** + 新鲜度标签
+      （新 <6h / 发酵中 / 冷却），hover 看最新动态与收录时间；最热原文 `↗ 原文` 可直接跳走。
+    - 详情页：来源域名带品牌名与真实域名、逐条列出原始指标徽章（无互动接口的源标"无互动数据"）、
+      区分"发布于 X"与"收录 Y"、GitHub 条目显示"建库于 Z"、发布者署名（`每经网`/`nirajrajgor`）。
+  - Watch 页：关键词芯片 + 每个关键词的命中流水，AI 理由以"甄别报告"形式展开；
+    命中条目同样区分"发布于/无发布时间"并显示原始互动徽章。
 - 通知：右上铃铛抽屉，SSE 实时。
 - Settings：范围管理、扫描频率、通知三渠道配置表单。
 - 响应式：≤768px 单列，雷达盘降级为状态条。
@@ -353,6 +419,7 @@ TOPIC_NOTIFY_MIN_SCORE=70
 质量门槛（v1.2）存 `settings` 表 `gates.*` 键，Web 设置页可调，`.env` 无需配置：
 `gates.hnPoints=30 gates.hnComments=15 gates.hfUpvotes=30 gates.ghStarsToday=50
 gates.ghSearchStars=100 gates.redditScore=200 gates.lobstersScore=20 gates.twitterLikes=50
+gates.biliScore=500 gates.authBili=5000
 gates.minQuality=60 gates.maxAgeDays=14 gates.dedupThreshold=0.85 gates.dedupEnabled=true`
 
 ## 10. 开发步骤与测试计划

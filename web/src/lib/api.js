@@ -96,6 +96,99 @@ export const fmtAgo = (iso) => {
   return `${Math.floor(s / 86400)}天前`;
 };
 
+/** 短日：今天/昨天显示时刻，更早显示月-日（判断"原始发布时间"比"N天前"更好用） */
+export const fmtShort = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  const y = new Date(now.getTime() - 86400000);
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  if (sameDay(d, now)) return hm;
+  if (sameDay(d, y)) return `昨天 ${hm}`;
+  return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+export const fmtNum = (n) => {
+  const v = Number(n) || 0;
+  // 中文语境用 万/亿 更好读（B站播放动辄百万，之前会显示成 "1834k"）
+  if (v >= 1e8) return `${trimZero(v / 1e8)}亿`;
+  if (v >= 1e4) return `${trimZero(v / 1e4)}万`;
+  return String(v);
+};
+
+const trimZero = (x) => {
+  const s = x.toFixed(1);
+  return s.endsWith('.0') ? s.slice(0, -2) : s;
+};
+
+/** 带日期与时刻（详情页"事件时间"跨度可能跨天，只给月-日会看不懂） */
+export const fmtDay = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const y = new Date();
+  const same = d.getFullYear() === y.getFullYear();
+  const md = `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}`;
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return same ? `${md} ${hm}` : `${d.getFullYear()}-${md} ${hm}`;
+  };
+
+  /** 原始互动指标标签（与后端 spec 对齐；只用于展示，不参与加权） */
+export const METRIC_LABEL = {
+  points: { label: '点赞', ico: '▲' },
+  upvotes: { label: '赞', ico: '▲' },
+  score: { label: '得分', ico: '◆' },
+  comments: { label: '评论', ico: '💬' },
+  replies: { label: '回复', ico: '↩' },
+  likes: { label: '点赞', ico: '👍' },
+  rts: { label: '转发', ico: '🔁' },
+  views: { label: '浏览', ico: '👁' },
+  stars: { label: 'Star', ico: '⭐' },
+  stars_today: { label: '今日新增', ico: '＋' },
+  forks: { label: 'Fork', ico: '⑂' },
+  // B站：互动维度最全，按"传播力"排序展示
+  like: { label: '点赞', ico: '👍' },
+  coin: { label: '投币', ico: '🪙' },
+  fav: { label: '收藏', ico: '⭐' },
+  share: { label: '转发', ico: '🔁' },
+  reply: { label: '评论', ico: '💬' },
+  danmaku: { label: '弹幕', ico: '💭' },
+  view: { label: '播放', ico: '▶' },
+};
+
+/** 各源的互动指标展示顺序（B站按"值得看/值得传"优先，播放量放最后） */
+const METRIC_ORDER = {
+  gh_trending: ['stars_today', 'stars', 'forks'],
+  gh_search: ['stars', 'forks'],
+  bilibili: ['like', 'coin', 'fav', 'share', 'reply', 'danmaku', 'view'],
+  bilibili_hot: ['like', 'coin', 'fav', 'share', 'reply', 'danmaku', 'view'],
+};
+const DEFAULT_METRIC_ORDER = ['points', 'likes', 'upvotes', 'score', 'stars', 'comments', 'rts', 'replies', 'views'];
+
+/** 条目原始互动指标 → 徽章列表（无互动数据的源返回空数组，前端据此标注"该源无互动数据"） */
+export function metricsList(source, metrics, max = 0) {
+  const order = METRIC_ORDER[source] || DEFAULT_METRIC_ORDER;
+  const list = order
+    .filter((k) => Number(metrics?.[k]) > 0)
+    .map((k) => ({ key: k, ...METRIC_LABEL[k], text: fmtNum(metrics[k]) }));
+  return max > 0 ? list.slice(0, max) : list;
+}
+
+/** 新鲜度分档：用于"新 <6h / 发酵中 / 冷却"标签 */
+export function freshness(iso) {
+  const t = Date.parse(iso || '');
+  if (!t) return null;
+  const h = (Date.now() - t) / 3600000;
+  if (h < 6) return { key: 'new', label: '新' };
+  if (h < 48) return { key: 'warm', label: '发酵中' };
+  return { key: 'cold', label: '冷却' };
+}
+
+/** 无发布时间的源：术语更准确，避免把采集时间当发布时间 */
+export const NO_DATE_NOTE = '该源不提供发布时间';
+
 export const SOURCE_LABEL = {
   hn: 'Hacker News',
   gh_trending: 'GitHub',
@@ -109,6 +202,8 @@ export const SOURCE_LABEL = {
   lobsters: 'Lobsters',
   reddit: 'Reddit',
   twitter: 'X / Twitter',
+  bilibili: 'B站',
+  bilibili_hot: 'B站热门',
 };
 
 /** 来源可信分级（与后端 quality.js 对齐） */

@@ -13,6 +13,8 @@ export const SOURCE_TIER = {
   media: 3,
   cn_media: 3,
   news_search: 3,
+  bilibili: 3,
+  bilibili_hot: 3,
   gh_trending: 2,
   gh_search: 2,
   hf_papers: 2,
@@ -39,6 +41,8 @@ export const GATED_SOURCES = new Set([
   'reddit',
   'lobsters',
   'twitter',
+  'bilibili', // 互动量化门槛（播放/点赞/投币/收藏/转发/弹幕加权）
+  'bilibili_hot',
   'web_search', // 域名硬门槛（官方/权威名单内才放行）
   'news_search', // 同上：拦边缘转载站（2026-10 收紧）
 ]);
@@ -184,16 +188,33 @@ export function isOfficialHost(host) {
   return hostMatch(host, OFFICIAL_HOSTS);
 }
 
+/** 用户生成内容的页面（不是厂商官宣）：HF 的模型/数据集/空间页人人可建，
+ *  搜索引擎抓到的这类页会把话题误标成"官方一手"（实测：某用户上传的 llama5.2 模型页被当成官方发布）。 */
+const UGC_PATH_RE = /^\/(?:datasets|spaces)\/|[^/]+\/[^/]+-(?:model|gguf|datasets?)(?:\/|$)/i;
+
 /**
  * 是否"厂商对自己产品的一手官宣"——判定**只看域名**（不看 source 是否 RSS）。
  * 这样 MIT Technology Review（technologyreview.com）、量子位等媒体即使走"官方博客"源
  * 也不会被误当官宣，从而不再享受单源豁免与加分。
- * 例外：hf_papers 虽托管在 huggingface.co，但它是作者自述预印本，不是厂商官宣。
+ * 例外：
+ *  - hf_papers：作者自述预印本，不是厂商官宣；
+ *  - HuggingFace 的用户模型/数据集页（/user/model-model）同理。
  */
-export function isOfficialAnnouncement(source, host) {
+export function isOfficialAnnouncement(source, host, url = '') {
   if (source === 'hf_papers') return false;
-  return isOfficialHost(host || '');
+  if (!isOfficialHost(host || '')) return false;
+  if (/huggingface\.co$/i.test(host || '') && UGC_PATH_RE.test(urlPath(url))) return false;
+  return true;
 }
+
+function urlPath(url) {
+  try {
+    return new URL(url).pathname || '';
+  } catch {
+    return String(url || '');
+  }
+}
+
 export function isAuthorityHost(host) {
   return hostMatch(host, AUTHORITY_HOSTS);
 }
@@ -229,6 +250,14 @@ export function weightedEngagement(source, metrics) {
       return n('likes') + n('rts') * 3 + n('replies') * 2 + Math.log10(1 + n('views')) * 10;
     case 'lobsters':
       return n('score') + n('comments');
+    // B站：投币(2)+收藏(3)+转发(4)比点赞更能代表"值得看/值得传"，弹幕与评论同权重（讨论度）；
+    // 播放量取 log 且只占小头——B站播放动辄百万，线性计入会淹没其他平台信号。
+    case 'bilibili':
+    case 'bilibili_hot':
+      return (
+        n('like') + n('coin') * 2 + n('fav') * 3 + n('share') * 4 +
+        n('danmaku') + n('reply') * 1.5 + Math.log10(1 + n('view')) * 30
+      );
     case 'gh_trending':
       return n('stars_today'); // 只有"当日新增"才是新闻信号，总星数不是
     case 'gh_search':
@@ -246,7 +275,9 @@ export function extractEngagement(metrics, source = '') {
 }
 
 /** 社交平台（其热度以加权互动分衡量，需达"权威门槛"才算被广泛讨论） */
-export const SOCIAL_SOURCES = new Set(['hn', 'reddit', 'twitter', 'lobsters', 'gh_trending', 'gh_search', 'hf_papers']);
+export const SOCIAL_SOURCES = new Set([
+  'hn', 'reddit', 'twitter', 'lobsters', 'gh_trending', 'gh_search', 'hf_papers', 'bilibili', 'bilibili_hot',
+]);
 
 /** 新鲜度：以发布时间（缺失则抓取时间）距今小时数 */
 export function ageHours(item, nowMs = Date.now()) {
@@ -318,10 +349,12 @@ export function computeQuality(item, nowMs = Date.now()) {
   // 域名权威（农场黑名单惩罚仅针对 T3/T4 源，避免误伤官方与策展源）
   if (isOfficialHost(host)) score += 15;
   else if (isAuthorityHost(host)) score += 10;
-  else if (isDeniedHost(host) && tier >= 3) {
-    score -= 25;
-    flags.push('content_farm');
-  } else if (tier === 4) score -= 5; // 泛搜索结果的未知域名
+    // 平台自身域名（bilibili.com / github.com…）是"内容托管在哪"，不是内容农场，
+    // 绝不能走农场惩罚——否则接入平台型信息源会自我惩罚（实测：B站条目被扣 25 分）
+    else if (!isPlatformHost(host) && isDeniedHost(host) && tier >= 3) {
+      score -= 25;
+      flags.push('content_farm');
+    } else if (tier === 4) score -= 5; // 泛搜索结果的未知域名
 
   // 标题特征
   const title = item.title || '';
@@ -368,6 +401,10 @@ export const DEFAULT_GATES = {
   redditScore: 200,
   lobstersScore: 20,
   twitterLikes: 50,
+  // B站：播放量以 log×30 计入（200 万播放才贡献 ~190 分），真正拉开差距的是点赞/投币/收藏/转发。
+  // 入库门槛 500 ≈ "几千播放且有点赞"的中等 UP 作品；爆款门槛 5000 ≈ 头部破圈内容。
+  biliScore: 500,
+  authBili: 5000,
   authHn: 100,
   authReddit: 800,
   authTwitter: 500,
@@ -390,6 +427,8 @@ const SOCIAL_GATE_KEY = {
   gh_trending: ['ghStarsToday', 'authGhTrending'],
   gh_search: ['ghSearchStars', 'authGhSearch'],
   hf_papers: ['hfUpvotes', 'authHfPapers'],
+  bilibili: ['biliScore', 'authBili'],
+  bilibili_hot: ['biliScore', 'authBili'],
 };
 
 export function gates() {
@@ -410,13 +449,15 @@ export function gates() {
     redditScore: num('redditScore', DEFAULT_GATES.redditScore),
     lobstersScore: num('lobstersScore', DEFAULT_GATES.lobstersScore),
     twitterLikes: num('twitterLikes', DEFAULT_GATES.twitterLikes),
-    authHn: num('authHn', DEFAULT_GATES.authHn),
+        biliScore: num('biliScore', DEFAULT_GATES.biliScore),
+        authHn: num('authHn', DEFAULT_GATES.authHn),
     authReddit: num('authReddit', DEFAULT_GATES.authReddit),
     authTwitter: num('authTwitter', DEFAULT_GATES.authTwitter),
     authLobsters: num('authLobsters', DEFAULT_GATES.authLobsters),
     authGhTrending: num('authGhTrending', DEFAULT_GATES.authGhTrending),
     authGhSearch: num('authGhSearch', DEFAULT_GATES.authGhSearch),
     authHfPapers: num('authHfPapers', DEFAULT_GATES.authHfPapers),
+        authBili: num('authBili', DEFAULT_GATES.authBili),
     minQuality: num('minQuality', DEFAULT_GATES.minQuality),
     maxAgeDays: num('maxAgeDays', DEFAULT_GATES.maxAgeDays),
     dedupThreshold: num('dedupThreshold', DEFAULT_GATES.dedupThreshold),
@@ -603,38 +644,38 @@ export function applyQualityGate(items, opts = {}) {
  *  - social_only：该话题是否完全由社交平台条目构成
  */
 export function evidenceOf(items, g = gates()) {
-  const sources = new Set();
-  const hosts = new Set();
-  const authorityHosts = new Set();
-  let hasOfficial = 0;
-  let viralCount = 0;
-  let socialOnly = items.length > 0;
+    const sources = new Set();
+    const hosts = new Set();
+    const authorityHosts = new Set();
+    let hasOfficial = 0;
+    let viralCount = 0;
+    let socialOnly = items.length > 0;
 
-  for (const it of items) {
-    sources.add(it.source);
-    const h = it.host || normalizeHost(it.url);
-    if (h) hosts.add(h);
-    if (isOfficialAnnouncement(it.source, h)) hasOfficial = 1;
+    for (const it of items) {
+      sources.add(it.source);
+      const h = it.host || normalizeHost(it.url);
+      if (h) hosts.add(h);
+      if (isOfficialAnnouncement(it.source, h, it.url)) hasOfficial = 1;
 
-    if (SOCIAL_SOURCES.has(it.source)) {
-      const eng = it.engagement ?? weightedEngagement(it.source, it.metrics);
-      if (isViral(it.source, eng, g)) viralCount++;
-    } else {
-      socialOnly = false;
-      if (h && (isAuthorityHost(h) || isOfficialHost(h))) authorityHosts.add(h);
+      if (SOCIAL_SOURCES.has(it.source)) {
+        const eng = it.engagement ?? weightedEngagement(it.source, it.metrics);
+        if (isViral(it.source, eng, g)) viralCount++;
+      } else {
+        socialOnly = false;
+        if (h && (isAuthorityHost(h) || isOfficialHost(h))) authorityHosts.add(h);
+      }
     }
-  }
 
-  return {
-    source_count: sources.size,
-    host_count: hosts.size,
-    has_official: hasOfficial,
-    authority_media_count: authorityHosts.size,
-    viral_count: viralCount,
-    social_only: socialOnly ? 1 : 0,
-    sources: [...sources].sort(),
-  };
-}
+    return {
+      source_count: sources.size,
+      host_count: hosts.size,
+      has_official: hasOfficial,
+      authority_media_count: authorityHosts.size,
+      viral_count: viralCount,
+      social_only: socialOnly ? 1 : 0,
+      sources: [...sources].sort(),
+    };
+  }
 
 /**
  * 证据等级 → 分数上限 / 可否通知。
@@ -677,6 +718,300 @@ export function hasNotifyEvidence(ev) {
   return EVIDENCE_TIERS[evidenceTier(ev)].notify;
 }
 
+// ---------------- v1.4 来源摘要与原始数据 ----------------
+
+/**
+ * 域名的展示品牌名（把 openai.com / techcrunch.com 变成人一眼认得的"谁在说"）。
+ * 名单不全没关系：未命中的域名回退为域名本身（去掉 .com/.cn 等后缀）。
+ */
+export const BRAND_HOSTS = {
+  // 厂商官方
+  'openai.com': 'OpenAI 官方',
+  'anthropic.com': 'Anthropic 官方',
+  'claude.com': 'Claude 官方',
+  'deepmind.google': 'DeepMind 官方',
+  'blog.google': 'Google 官方',
+  'googleblog.com': 'Google 官方',
+  'ai.meta.com': 'Meta AI 官方',
+  'meta.com': 'Meta 官方',
+  'mistral.ai': 'Mistral 官方',
+  'cohere.com': 'Cohere 官方',
+  'x.ai': 'xAI 官方',
+  'microsoft.com': 'Microsoft 官方',
+  'nvidia.com': 'NVIDIA 官方',
+  'huggingface.co': 'HuggingFace',
+  'deepseek.com': 'DeepSeek 官方',
+  'moonshot.cn': '月之暗面官方',
+  'bigmodel.cn': '智谱官方',
+  'zhipuai.cn': '智谱官方',
+  'ollama.com': 'Ollama 官方',
+  'langchain.com': 'LangChain 官方',
+  // 权威媒体（英文）
+  'reuters.com': '路透社',
+  'apnews.com': '美联社',
+  'bloomberg.com': '彭博社',
+  'ft.com': '金融时报',
+  'wsj.com': '华尔街日报',
+  'nytimes.com': '纽约时报',
+  'theverge.com': 'The Verge',
+  'techcrunch.com': 'TechCrunch',
+  'arstechnica.com': 'Ars Technica',
+  'wired.com': 'WIRED',
+  'theguardian.com': '卫报',
+  'bbc.com': 'BBC',
+  'cnbc.com': 'CNBC',
+  'businessinsider.com': 'Business Insider',
+  'forbes.com': '福布斯',
+  'venturebeat.com': 'VentureBeat',
+  'zdnet.com': 'ZDNet',
+  'tomshardware.com': "Tom's Hardware",
+  'theregister.com': 'The Register',
+  'the-decoder.com': 'The Decoder',
+  'semianalysis.com': 'SemiAnalysis',
+  'technologyreview.com': 'MIT 科技评论',
+  'mittrchina.com': 'MIT 科技评论中文',
+  'axios.com': 'Axios',
+  'nature.com': 'Nature',
+  'arxiv.org': 'arXiv',
+  'syncedreview.com': 'Synced',
+  // 中文媒体
+  'xinhuanet.com': '新华社',
+  'news.cn': '新华网',
+  'people.com.cn': '人民网',
+  'cctv.com': '央视网',
+  'chinadaily.com.cn': '中国日报',
+  'thepaper.cn': '澎湃新闻',
+  'jiemian.com': '界面新闻',
+  'yicai.com': '第一财经',
+  'caixin.com': '财新',
+  '21jingji.com': '21世纪经济报道',
+  'stcn.com': '证券时报',
+  'cls.cn': '财联社',
+  'wallstreetcn.com': '华尔街见闻',
+  'nbd.com.cn': '每日经济新闻',
+  'ifeng.com': '凤凰网',
+  'sina.com.cn': '新浪',
+  'chinanews.com': '中新网',
+  'chinanews.com.cn': '中新网',
+  'zaobao.com': '联合早报',
+  'ftchinese.com': 'FT中文网',
+  'qbitai.com': '量子位',
+  'jiqizhixin.com': '机器之心',
+  'infoq.cn': 'InfoQ 中文',
+  'geekpark.net': '极客公园',
+  'leiphone.com': '雷锋网',
+  'ifanr.com': '爱范儿',
+  '36kr.com': '36氪',
+  'ithome.com': 'IT之家',
+  'tmtpost.com': '钛媒体',
+  'sspai.com': '少数派',
+  'oschina.net': '开源中国',
+  'iresearch.cn': '艾瑞网',
+  'hexun.com': '和讯网',
+  'c114.com.cn': 'C114 通信网',
+  'eastday.com': '东方网',
+  'cs.com.cn': '中国证券报',
+  'gmw.cn': '光明网',
+  'gov.cn': '中国政府网',
+  'pingwest.com': '品玩',
+  'iheima.com': 'i黑马',
+  'iyiou.com': '亿欧',
+  'ctiforum.com': '通信世界',
+  'jrj.com.cn': '金融界',
+  'cnstock.com': '上海证券报',
+  'lzwjia.com': '量子位',
+    // 平台自身域名（社交/榜单/论文库条目 URL 的 host）
+    'github.com': 'GitHub',
+    'news.ycombinator.com': 'Hacker News',
+    'ycombinator.com': 'Hacker News',
+    'lobste.rs': 'Lobsters',
+    'reddit.com': 'Reddit',
+    'x.com': 'X / Twitter',
+    'twitter.com': 'X / Twitter',
+    'aws.amazon.com': 'AWS 官方',
+    'ibm.com': 'IBM',
+    'npr.org': 'NPR',
+    'youtube.com': 'YouTube',
+    'bleepingcomputer.com': 'BleepingComputer',
+    'bilibili.com': 'B站',
+  };
+
+  /** 公共二级后缀（回退取域名时需多带一级，避免把 aws.amazon.com 截成 aws.amazon） */
+  const PUBLIC_SLD = /^(co|com|net|org|gov|edu)\.(uk|cn|au|jp|hk|tw|br|in|de|fr|ru|kr|sg|nz|za|mx|ar|tr|it|es|nl|se|no|pl)$/;
+
+/** 无自有域名的渠道型源（社交/榜单/论文库）的展示名 */
+export const BRAND_SOURCES = {
+  hn: 'Hacker News',
+  gh_trending: 'GitHub Trending',
+  gh_search: 'GitHub 新库',
+  hf_papers: 'HF Papers',
+  lobsters: 'Lobsters',
+  reddit: 'Reddit',
+  twitter: 'X / Twitter',
+  bilibili: 'B站',
+  bilibili_hot: 'B站热门',
+};
+
+/** 域名品牌名（未命中名单则回退取域名主干，如 aws.amazon.com → amazon） */
+export function brandOfHost(host) {
+  if (!host) return '';
+  if (BRAND_HOSTS[host]) return BRAND_HOSTS[host];
+  const hit = Object.keys(BRAND_HOSTS).find((d) => host === d || host.endsWith('.' + d));
+  if (hit) return BRAND_HOSTS[hit];
+  const parts = host.split('.');
+  // 双段后缀（co.uk/com.cn）多带一级：aws.amazon.co.uk → amazon
+  const take = parts.length >= 3 && PUBLIC_SLD.test(parts.slice(-2).join('.')) ? 3 : 2;
+  const main = parts.length > take && parts[parts.length - take] !== 'www' ? parts[parts.length - take] : parts[0];
+  return main || host;
+}
+
+/**
+ * 来源权威度分级（决定"最权威来源"取谁）：
+ * 4=厂商/机构官方一手，3=权威媒体，2=策展社区/论文库，1=其他。
+ * hf_papers 不走官方豁免（作者自述预印本），按论文库算。
+ */
+export function authorityRank(source, host, url = '') {
+  // hf_papers 虽托管在 huggingface.co（官方域名名单内），但它是作者自述预印本而非厂商官宣，
+  // 与证据分级口径保持一致：按"论文库"算，不计入权威来源数。
+  if (source === 'hf_papers') return 2;
+  if (source === 'blog' && !isOfficialHost(host)) return 3; // 官方博客源里的媒体出版方
+  // 官宣判定要排除社交/榜单渠道：X 帖若链接自家站点（x.ai）也只是"在 X 上发帖"，
+  // 不是一手官宣页；这类条目应作为社交信号（rank 2）参与，而不是压过新闻报道。
+  if (!CHANNEL_SOURCES.has(source) && isOfficialAnnouncement(source, host, url)) return 4;
+  // HuggingFace：官方组织空间才是官方发布，用户模型/数据集页按论文库档位（不为"单源"脱罪）
+  if (/huggingface\.co$/i.test(host || '')) return 2;
+  if (isAuthorityHost(host) || isOfficialHost(host)) return 3;
+  if (BRAND_SOURCES[source]) return 2;
+  return 1;
+}
+
+/**
+ * 渠道型源：条目自带的域名只是平台自身（github.com / news.ycombinator.com / x.com…），
+ * 不代表"谁在说这件事"。它们按渠道（BRAND_SOURCES）参与排序，不享受厂商官宣豁免。
+ */
+export const CHANNEL_SOURCES = new Set([
+  'hn', 'gh_trending', 'gh_search', 'hf_papers', 'lobsters', 'reddit', 'twitter', 'bilibili', 'bilibili_hot',
+]);
+
+/** 平台自身域名（社交/榜单/论文库）：没有"平台"这个来源方，展示与计数都应排除 */
+export const PLATFORM_HOSTS = [
+  'huggingface.co', 'github.com', 'x.com', 'twitter.com', 'news.ycombinator.com', 'lobste.rs', 'reddit.com',
+  'bilibili.com', 'b23.tv',
+];
+
+/** 是否"平台自身"域名（前端用于过滤"来源域名"列表与计数） */
+export function isPlatformHost(host) {
+return hostMatch(host, PLATFORM_HOSTS);
+}
+
+/** 该条目的原始指标是否有意义（新闻/官宣源没有互动接口，恒为 0） */
+export function metricCount(source, metrics) {
+  const m = parseMetricsObj(metrics);
+  return Object.values(m).filter((v) => Number(v) > 0).length;
+}
+
+/**
+ * 发布者署名：X 的 @handle 规范化，GitHub 条目的 author 其实是语言（不是发布者）故置空。
+ * 与 routes/api.js 的展示口径保持一致（前端列表与卡片署名不打架）。
+ */
+export function labelAuthor(author, source) {
+  const a = String(author || '').trim();
+  if (!a) return '';
+  if (source === 'gh_trending' || source === 'gh_search') return '';
+  if (source === 'twitter') return a.startsWith('@') ? a : `@${a}`;
+  return a;
+}
+
+/**
+ * 来源摘要：算出"卡片该显示的 1~2 个最权威来源"与话题的原始发布/互动轴。
+ *
+ * 排序优先级：厂商官方 > 权威媒体 > 策展社区；同档按发布时间新→旧，再按域名稳定排序，
+ * 保证同一话题跨轮次展示一致（不会每轮扫描换个来源）。
+ * 注意话题的 last_updated 是聚类时间、会随并入新条目而变，不能用来判断新旧，
+ * 故这里单列 publishedFirst / publishedLast 作为原始发布轴。
+ *
+ * @param {Array<{source,url,host,metrics,published_at,author,title}>} items 话题全部条目
+  * @param {object} opts { max: 卡片显示几个来源 }
+ */
+export function summarizeSources(items, opts = {}) {
+  const max = opts.max || 2;
+  const list = items || [];
+  if (!list.length) {
+    return {
+      primarySource: '', primaryHost: '', primaryLabel: '', primaryUrl: '', primaryTier: 0,
+      primaryAuthor: '', authorityCount: 0, shown: [], metrics: null,
+      publishedFirst: '', publishedLast: '',
+    };
+  }
+
+  const ranked = list
+    .map((it) => {
+      const h = it.host || normalizeHost(it.url || '');
+        return {
+          it,
+          host: h,
+          rank: authorityRank(it.source, h, it.url),
+          // "权威媒体/官方也报道了"的有效证据：必须是有编辑责任的外部**媒体/官方域名**。
+          // 平台自身域名（huggingface.co / github.com / x.com…）不算报道——否则用户上传的
+          // 模型页会被算成"媒体交叉"（实测：某用户 llama5.2 模型页曾把话题抬成官方一手）。
+          isAuthMedia: !isPlatformHost(h) && (isAuthorityHost(h) || isOfficialHost(h)),
+          ts: Date.parse(it.published_at || '') || 0,
+          eng: weightedEngagement(it.source, it.metrics),
+        };
+      })
+      .sort(
+      (a, b) =>
+        b.rank - a.rank ||
+        b.ts - a.ts ||
+        (a.host || '').localeCompare(b.host || '') ||
+        String(a.it.url || '').localeCompare(String(b.it.url || ''))
+    );
+
+  const top = ranked[0];
+    // 权威来源数 = 官方/权威媒体的**不同域名**数（不含平台自身域名），
+    // 与 evidenceOf().authority_media_count 同口径：同一家媒体发 8 篇只算 1 个来源，
+    // 卡片上的 "+N" 就是"另外还有 N 家权威媒体/官方也在说"。
+    const authorityCount = new Set(ranked.filter((r) => r.isAuthMedia).map((r) => r.host)).size;
+
+  // 最热条目：只在有原始互动指标的类型里选（官宣/新闻类参与只会全是 0）
+  const best = ranked.filter((r) => metricCount(r.it.source, r.it.metrics) > 0).sort((a, b) => b.eng - a.eng)[0];
+  const metrics = best
+      ? {
+          source: best.it.source,
+          url: best.it.url,
+          title: best.it.title,
+          author: labelAuthor(best.it.author, best.it.source),
+          // metrics 列是 TEXT：这里必须解析成对象再落库，否则消费方拿到的是 JSON 字符串
+          values: parseMetricsObj(best.it.metrics),
+        }
+      : null;
+
+  const dates = list.map((it) => it.published_at).filter(Boolean).sort();
+
+  return {
+    primarySource: top.it.source,
+    primaryHost: top.host,
+    primaryLabel: top.host ? brandOfHost(top.host) : BRAND_SOURCES[top.it.source] || top.it.source,
+    primaryUrl: top.it.url,
+    primaryTier: top.rank,
+        primaryAuthor: labelAuthor(top.it.author, top.it.source),
+    authorityCount,
+    shown: ranked
+      .filter((r, i) => r.rank >= 2 || i === 0)
+      .slice(0, max)
+      .map((r) => ({
+        host: r.host,
+        label: r.host ? brandOfHost(r.host) : BRAND_SOURCES[r.it.source] || r.it.source,
+        url: r.it.url,
+        source: r.it.source,
+        rank: r.rank,
+      })),
+    metrics,
+    publishedFirst: dates[0] || '',
+    publishedLast: dates[dates.length - 1] || '',
+  };
+}
+
 export default {
   computeQuality,
   gates,
@@ -686,4 +1021,8 @@ export default {
   hasNotifyEvidence,
   weightedEngagement,
   isViral,
+  summarizeSources,
+  brandOfHost,
+  authorityRank,
+  labelAuthor,
 };

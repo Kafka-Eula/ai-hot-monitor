@@ -386,6 +386,40 @@ nav.tabs button.on {
 .trow .chip.viral { border-color: rgba(232, 121, 249, 0.3); color: rgba(232, 121, 249, 0.85); }
 .trow .chip.warn { border-color: rgba(251, 191, 36, 0.28); color: rgba(251, 191, 36, 0.8); }
 .trow .chip.src { border-color: var(--line2); color: var(--dim); }
+/* 最权威来源徽章：官方一手用绿，权威媒体用蓝，一眼区分"谁在说" */
+.trow .chip.src-official { border-color: rgba(52, 211, 153, 0.45); color: rgba(52, 211, 153, 0.95); }
+.trow .chip.src-media { border-color: rgba(56, 189, 248, 0.42); color: rgba(56, 189, 248, 0.95); }
+/* 原始互动徽章：数字优先，图标只作提示 */
+.trow .chip.metric { display: inline-flex; gap: 9px; border-color: rgba(62, 242, 165, 0.22); }
+.trow .chip.metric i { font-style: normal; display: inline-flex; align-items: center; gap: 3px; color: rgba(62, 242, 165, 0.92); }
+/* 互动数据在标签行里放主位：更亮的边框 + 稍大字号，扫视时先看到数字 */
+.trow .chip.metric.lead {
+  gap: 11px; padding: 4px 12px; border-color: rgba(62, 242, 165, 0.5);
+  background: linear-gradient(180deg, rgba(62, 242, 165, 0.13), rgba(62, 242, 165, 0.03));
+  box-shadow: 0 0 12px rgba(62, 242, 165, 0.1);
+}
+.trow .chip.metric.lead i { color: #3ef2a5; font-size: 12.5px; }
+.trow .chip.metric.lead i b { font-weight: 600; margin-left: 1px; }
+/* 该源本就没有互动接口（新闻/官宣/媒体）：低对比度如实标注，不显示 0 */
+.trow .chip.metric.lead.none {
+  border-color: var(--line2); background: none; box-shadow: none; color: #6f89a6;
+}
+/* 新鲜度：新=荧光绿，发酵中=琥珀，冷却=灰 */
+.tfresh {
+  font-style: normal; margin-left: 7px; padding: 1px 6px; border-radius: 4px; font-size: 10px;
+  border: 1px solid currentColor; opacity: 0.85;
+}
+.tfresh.new { color: #3ef2a5; }
+.tfresh.warm { color: #ffb454; }
+.tfresh.cold { color: #6f89a6; }
+.trow-time s { text-decoration: none; opacity: 0.55; margin-left: 7px; }
+/* 卡片直达原文 */
+.trow-go {
+  font-family: var(--hud); font-size: 11.5px; color: var(--cyan); text-decoration: none;
+  border: 1px solid var(--cyan-dim); border-radius: 20px; padding: 3px 10px; white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.trow-go:hover { background: rgba(34, 211, 238, 0.12); color: #dff9ff; }
 .trow.hot { border-color: rgba(232, 121, 249, 0.22); }
 
 /* 分组视图列宽较窄：收紧热度块与内边距，把横向空间让给文字 */
@@ -633,6 +667,25 @@ nav.tabs button.on {
 .src-bar i { display: block; }
 .src-legend { display: flex; flex-wrap: wrap; gap: 10px; font-family: var(--hud); font-size: 11px; color: var(--dim); margin-bottom: 16px; }
 .src-legend span::before { content: '■ '; }
+/* 品牌名后面的真实域名：极小号、低对比度，需要核对时能一眼看到 */
+.src-legend u { text-decoration: none; margin-left: 5px; font-size: 10px; opacity: 0.5; }
+
+/* ---------- 详情页原始互动指标 ---------- */
+.hit-metrics { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 7px; }
+.hit-metrics .metric {
+  display: inline-flex; align-items: baseline; gap: 4px; font-family: var(--hud); font-size: 11px;
+  padding: 2px 8px; border-radius: 20px; border: 1px solid rgba(62, 242, 165, 0.22); color: rgba(62, 242, 165, 0.9);
+  background: rgba(11, 18, 32, 0.4);
+}
+.hit-metrics .metric b { font-weight: 400; font-size: 12.5px; }
+.hit-metrics .metric s { text-decoration: none; opacity: 0.6; font-size: 10px; }
+/* 无互动数据的源：低对比度灰，明确表示"该源没有这个数据"而不是 0 */
+.hit-metrics .metric.none {
+  border-color: var(--line2); color: #6f89a6; background: none;
+}
+/* Watch 页命中流水里的一行小徽章 */
+.hm-inline { display: inline-flex; gap: 8px; margin-left: 6px; }
+.hm-inline i { font-style: normal; color: rgba(62, 242, 165, 0.9); }
 
 /* ---------- 设置页 ---------- */
 .set-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 18px; align-items: start; }

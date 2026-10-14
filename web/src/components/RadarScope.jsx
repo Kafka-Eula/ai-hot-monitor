@@ -14,6 +14,8 @@ export const SRC_COLOR = {
   lobsters: '#c084fc',
   reddit: '#ff4500',
   twitter: '#e879f9',
+  bilibili: '#FF6699',
+  bilibili_hot: '#FF6699',
 };
 
 const ACCENT = '#22D3EE'; // 主强调：青电光

@@ -9,6 +9,7 @@ import * as cnSearch from './cnSearch.js';
 import * as cnMedia from './cnMedia.js';
 import * as lobsters from './lobsters.js';
 import * as twitter from './twitter.js';
+import * as bilibili from './bilibili.js';
 
 /**
  * 启用中的信息源。
@@ -19,7 +20,7 @@ import * as twitter from './twitter.js';
  *  - web_search（DuckDuckGo 泛网页搜索）：45 条 → 入库 19 条，但**每条有效结果耗时 4.1s**
  *    （其余源均 ≤0.6s），且结果多为 SEO 站/官网首页 → 摘除；
  *    中文由 cn_search(360新闻)、英文由 news_search(Google/Bing News RSS) 覆盖，信息不丢。
- * 保留的 10 源里，hn/lobsters 虽然入库少但抓取便宜（≤6s）且常有一手深度帖，留着。
+ * 保留的源里，hn/lobsters 虽然入库少但抓取便宜（≤6s）且常有一手深度帖，留着。
  */
 export const SOURCES = [
   { name: 'hn', fn: hackernews.collect },
@@ -32,6 +33,8 @@ export const SOURCES = [
   { name: 'cn_media', fn: cnMedia.collect },
   { name: 'lobsters', fn: lobsters.collect },
   { name: 'twitter', fn: twitter.collect },
+  // B站：中文 AI 视频与 UP 主实时动态，互动数据最丰富（播放/点赞/投币/收藏/转发/弹幕/评论）
+  { name: 'bilibili', fn: bilibili.collect },
 ];
 
 /**

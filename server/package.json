@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "test": "node --test test/quality.test.js test/cnDate.test.js",
+    "test": "node --test test/quality.test.js test/cnDate.test.js test/summarize.test.js test/bilibili.test.js",
     "test:collectors": "node test/collectors.test.js",
     "test:pipeline": "node test/pipeline.test.js",
     "backfill": "node scripts/backfill.mjs",

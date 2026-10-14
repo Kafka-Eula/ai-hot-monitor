@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, fmtAgo, SOURCE_LABEL } from '../lib/api.js';
+import { api, fmtAgo, fmtShort, freshness, metricsList, SOURCE_LABEL, NO_DATE_NOTE } from '../lib/api.js';
 import RadarScope from '../components/RadarScope.jsx';
 import TopicFilters, { loadFilters, DEFAULT_FILTERS } from '../components/TopicFilters.jsx';
 import { BackgroundBeams } from '../components/ui/background-beams.jsx';
@@ -133,7 +133,7 @@ export default function Radar({ scanning, scanInfo, pollTick, progress, onOpenTo
             </div>
             <h1 className="hero-title title-gradient">AI 热点雷达</h1>
             <p className="hero-sub">
-              十路信息源实时嗅探 · 质量门槛过滤噪音 · AI 甄别与多源佐证评分 —— 让你永远站在吃瓜第一线。
+              十一 路信息源实时嗅探 · 质量门槛过滤噪音 · AI 甄别与多源佐证评分 —— 让你永远站在吃瓜第一线。
             </p>
 
             <div className="hud-stats">
@@ -213,7 +213,7 @@ export default function Radar({ scanning, scanInfo, pollTick, progress, onOpenTo
                 </h3>
                 <div className="tf-list">
                   {g.list.map((t) => (
-                    <TopicCard key={t.id} t={t} items={items} onOpen={onOpenTopic} />
+                                    <TopicCard key={t.id} t={t} onOpen={onOpenTopic} />
                   ))}
                 </div>
               </div>
@@ -223,7 +223,7 @@ export default function Radar({ scanning, scanInfo, pollTick, progress, onOpenTo
           /* 统一长条形：一行一条，不再用 Bento 错落网格 */
           <div className="tf-list">
             {shown.map((t) => (
-              <TopicCard key={t.id} t={t} items={items} onOpen={onOpenTopic} />
+                        <TopicCard key={t.id} t={t} onOpen={onOpenTopic} />
             ))}
           </div>
         )}
@@ -338,23 +338,38 @@ const SRC_COLOR = {
   lobsters: '#c084fc',
   reddit: '#ff4500',
   twitter: '#e879f9',
+  bilibili: '#FF6699',
+  bilibili_hot: '#FF6699',
 };
 
 /**
  * 话题卡片：统一长条形（一行一条）。
  * 视觉上刻意"降噪"——描述小字与强调字都压到低对比度，
  * 让扫视时先看到标题与热度，细节按需再看。
+ *
+ * v1.4 省时改造：
+ *  - 来源只显示 1~2 个**最权威**的（官方/媒体域名 → 品牌名），其余折叠为 +N，
+ *    不再一次挂 4 个渠道名（Hacker News / 新闻搜索 这类名字无法判断信息价值）；
+ *  - 显示**原始发布时间**与新鲜度，hover 看最新动态（last_updated 是聚类时间，会误导新旧）；
+ *  - 显示话题内最热条目的**原始互动指标**（79赞·23评 / ⭐233 / ▲72）；
+ *  - 最热原文可直接 ↗ 跳转，不点详情也能走。
  */
-function TopicCard({ t, items, onOpen }) {
-  const ids = new Set(t.item_ids || []);
-  const mine = items.filter((i) => ids.has(i.id));
-  // 信息源标签优先用后端落库的 sources（覆盖全部历史条目），items 窗口只做兜底
-  const srcs = t.sources?.length ? t.sources : [...new Set(mine.map((i) => i.source))];
-  const hot = t.score >= 80;
-  const srcCount = t.source_count || srcs.length || 1;
-  const official = t.has_official || srcs.includes('blog');
-  const viral = t.viral_count || 0;
+function TopicCard({ t, onOpen }) {
+  const srcCount = t.source_count || 1;
+    // 必须转成布尔：直接 `{official && ...}` 在 official=0 时 React 会把 0 渲染成文本
+    const official = Boolean(t.has_official);
+    const viral = t.viral_count || 0;
   const tier = t.evidence_tier || '';
+  const hot = t.score >= 80;
+
+  // 最权威来源（后端算好：primary_* + authority_count，跨轮次稳定）
+  const primaryLabel = t.primary_label || SOURCE_LABEL[t.primary_source] || '';
+  const extra = Math.max(0, (t.authority_count || 0) - 1);
+  const tm = t.top_metrics || {};
+    // 卡片上互动徽章取前 4 个（B站维度多：点赞/投币/收藏/转发…），其余在详情页看全
+    const badges = metricsList(tm.source, tm.values, 4);
+  const fresh = freshness(t.published_first);
+  const pubText = t.published_first ? fmtShort(t.published_first) : '';
 
   return (
     <BentoCard className={`trow ${hot ? 'hot' : ''}`} highlight={hot ? '#E879F9' : '#22D3EE'} onClick={() => onOpen(t.id)}>
@@ -369,12 +384,38 @@ function TopicCard({ t, items, onOpen }) {
         {t.why_hot && <p className="topic-why">▸ {t.why_hot}</p>}
 
         <div className="bento-foot">
-          {srcCount >= 2 && (
-            <span className="chip" title="多源交叉证实">
-              ⛓ {srcCount} 源
-            </span>
-          )}
-          {official && (
+                  {/* 互动数据放主位：这是"值不值得点开"最快的判据（B站/社交源才有，新闻/官宣如实留白） */}
+                  {badges.length > 0 ? (
+                    <span className="chip metric lead" title={`${SOURCE_LABEL[tm.source] || tm.source} 原始互动数据（未加权）`}>
+                      {badges.map((b) => (
+                        <i key={b.key} title={b.label}>
+                          {b.ico}
+                          <b>{b.text}</b>
+                        </i>
+                      ))}
+                    </span>
+                  ) : (
+                    <span className="chip metric lead none" title="该来源不提供互动数据（新闻/官宣/媒体类）">
+                      无互动数据
+                    </span>
+                  )}
+
+                  {/* 来源：权威优先，1 个标签 + 折叠计数 */}
+                  {primaryLabel && (
+                    <span
+                      className={`chip src ${t.primary_tier >= 4 ? 'src-official' : t.primary_tier === 3 ? 'src-media' : ''}`}
+                      title={t.primary_host ? `最权威来源：${t.primary_label}（${t.primary_host}）` : '最权威来源'}
+                    >
+                      {primaryLabel}
+                    </span>
+                  )}
+                  {extra > 0 && (
+                    <span className="chip" title={`另有 ${extra} 家权威媒体/官方也在报道（展开详情查看）`}>
+                      +{extra}
+                    </span>
+                  )}
+
+                  {official && (
             <span className="chip ok" title="含官方一手来源">
               ✓ 官方
             </span>
@@ -400,15 +441,27 @@ function TopicCard({ t, items, onOpen }) {
               {viral === 1 ? '爆款·孤证' : '单源'}
             </span>
           )}
-          {srcs.slice(0, 4).map((s) => (
-            <span key={s} className="chip src" style={{ borderColor: SRC_COLOR[s] + '3d', color: SRC_COLOR[s] + 'cc' }}>
-              {SOURCE_LABEL[s] || s}
-            </span>
-          ))}
-          {srcs.length > 4 && <span className="chip">+{srcs.length - 4}</span>}
-          <span className="trow-time">
-            {t.item_ids?.length || 0} 条 · {fmtAgo(t.last_updated)}更新
+
+          {/* 原始发布时间（事件何时发生）+ 新鲜度；标题提示最新动态时间 */}
+          <span className="trow-time" title={`首发 ${pubText || '未知'} · 最新一条动态 ${fmtAgo(t.published_last || t.last_updated)} · 收录于 ${fmtAgo(t.last_updated)}`}>
+            {pubText ? `首发 ${pubText}` : fresh === null ? NO_DATE_NOTE : ''}
+            {fresh && <i className={`tfresh ${fresh.key}`}>{fresh.label}</i>}
+            <s>{t.item_ids?.length || 0} 条</s>
           </span>
+
+          {/* 直达最热原文（不点详情也能跳走） */}
+          {tm.url && (
+            <a
+              className="trow-go"
+              href={tm.url}
+              target="_blank"
+              rel="noreferrer"
+              title={`打开原文：${tm.title || tm.url}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              ↗ 原文
+            </a>
+          )}
         </div>
       </div>
     </BentoCard>

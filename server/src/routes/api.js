@@ -6,6 +6,7 @@ import { aiStatus, listModels } from '../ai/openrouter.js';
 import { publicKey, saveSub, dropSub, pushAll, pushConfigured, subCount } from '../notify/webpush.js';
 import { notify } from '../notify/index.js';
 import { emailReady } from '../notify/mailer.js';
+import { labelAuthor, brandOfHost, isPlatformHost } from '../quality.js';
 
 export const api = Router();
 
@@ -60,12 +61,14 @@ api.delete('/keywords/:id', (req, res) => {
 api.get('/keywords/:id/hits', (req, res) => {
   const rows = db
     .prepare(
-      `SELECT h.*, i.title, i.url, i.source, i.published_at, i.summary, i.host, i.engagement, i.source_tier, i.quality_score
+      `SELECT h.*, i.title, i.url, i.source, i.published_at, i.collected_at, i.summary, i.host, i.metrics, i.author, i.engagement, i.source_tier, i.quality_score
        FROM hits h JOIN items i ON i.id=h.item_id
        WHERE h.keyword_id=? ORDER BY h.screened_at DESC LIMIT 200`
     )
     .all(req.params.id);
-  res.json(rows.map((r) => ({ ...r, passed: r.relevant === 1 && r.genuine === 1 })));
+  res.json(
+    rows.map((r) => ({ ...enrichItem(r), passed: r.relevant === 1 && r.genuine === 1 }))
+  );
 });
 
 // ---------- scopes ----------
@@ -133,6 +136,17 @@ const SINCE_BUCKETS = [
   ['30d', 30],
 ];
 
+/**
+ * 话题的"发布轴"参考时间。
+ *
+ * last_updated 是聚类更新时间，只要并入一条新条目就会变——用它排序会让昨天的旧闻
+ * 因为今天被讨论而排到最前。故优先用条目里**最新一条的发布时间**（published_last）。
+ * 快照榜源（GitHub trending / HF daily_papers）本身没有发布时间，此时退回 last_updated。
+ */
+function axisTime(t) {
+  return Date.parse(t.published_last || '') || Date.parse(t.last_updated) || 0;
+}
+
 /** 按除 except 外的所有维度筛选（except 传 null 表示全量应用） */
 function applyDims(list, q, except) {
   const has = (k) => except !== k && q[k] && q[k] !== 'all';
@@ -160,9 +174,10 @@ function applyDims(list, q, except) {
     const m = /^(\d+)([hd])$/.exec(String(q.since));
     if (m) {
       const cutoff = Date.now() - Number(m[1]) * (m[2] === 'h' ? 3600e3 : 86400e3);
-      rows = rows.filter((t) => Date.parse(t.last_updated) >= cutoff);
+        // 时间窗也走发布轴：否则"7 天内"会把两周前的旧闻按聚类时间算成新鲜
+        rows = rows.filter((t) => axisTime(t) >= cutoff);
+      }
     }
-  }
   if (has('min_score')) {
     const ms = Number(q.min_score);
     if (!Number.isNaN(ms)) rows = rows.filter((t) => Number(t.score) >= ms);
@@ -180,7 +195,7 @@ api.get('/topics', (req, res) => {
 
   const sorters = {
     score: (a, b) => b.score - a.score || Date.parse(b.last_updated) - Date.parse(a.last_updated),
-    updated: (a, b) => Date.parse(b.last_updated) - Date.parse(a.last_updated) || b.score - a.score,
+      updated: (a, b) => axisTime(b) - axisTime(a) || b.score - a.score,
     sources: (a, b) => (b.source_count || 1) - (a.source_count || 1) || b.score - a.score,
     items: (a, b) => (b.item_ids?.length || 0) - (a.item_ids?.length || 0) || b.score - a.score,
   };
@@ -199,7 +214,7 @@ api.get('/topics', (req, res) => {
     tier: countBy(tierBase, (t) => t.evidence_tier || 'unknown'),
     sources: countBy(applyDims(all, q, 'sources').flatMap((t) => t.sources || []), (s) => s),
     since: Object.fromEntries(
-      SINCE_BUCKETS.map(([k, days]) => [k, sinceBase.filter((t) => nowMs - Date.parse(t.last_updated) < days * 86400e3).length])
+          SINCE_BUCKETS.map(([k, days]) => [k, sinceBase.filter((t) => nowMs - axisTime(t) < days * 86400e3).length])
     ),
     // 折叠条用：当前其余筛选下"低佐证"还剩多少
     weak: tierBase.filter((t) => !TIER_STRONG.has(t.evidence_tier)).length,
@@ -233,7 +248,106 @@ function parseTopic(t) {
   } catch {
     /* 列缺失或旧数据 */
   }
-  return { ...t, item_ids: JSON.parse(t.item_ids || '[]'), sources };
+  let topMetrics = {};
+  try {
+    topMetrics = JSON.parse(t.top_metrics || '{}');
+  } catch {
+    /* 同上 */
+  }
+  return { ...t, item_ids: JSON.parse(t.item_ids || '[]'), sources, top_metrics: topMetrics };
+}
+
+/** 可信等级中文名（详情页逐条标注来源身份） */
+const TIER_NAME = { 0: '未知', 1: '官方一手', 2: '强策展', 3: '主流媒体', 4: '泛搜索' };
+
+/**
+ * 条目补充展示字段（详情页用）：
+ *  - 区分"发布于"（原始发布时间）与"收录于"（采集时间，榜单/快照源没有发布时间）
+ *  - metrics 解析 + 标签化（前端直接渲染"👍79 💬23"）
+ *  - 若指标里带 created_at（GitHub 仓库补的真实建库时间），单列 repo_created 供"建库于 X"展示
+ */
+function enrichItem(i) {
+  let metrics = {};
+  try {
+    metrics = JSON.parse(i.metrics || '{}');
+  } catch {
+    /* 旧数据 */
+  }
+  const { created_at: repoCreated, ...rest } = metrics;
+    return {
+      ...i,
+      metrics: rest,
+      metric_list: metricList(rest, i.source),
+      labels: labelMetrics(i.source, rest),
+      published_at: i.published_at || '',
+      collected_at: i.collected_at || '',
+      has_published: Boolean(i.published_at),
+      repo_created: repoCreated || '',
+      tier_name: TIER_NAME[i.source_tier] || '',
+      brand: i.host ? brandOfHost(i.host) : '',
+      platform_host: Boolean(i.host) && isPlatformHost(i.host),
+      author_label: labelAuthor(i.author, i.source),
+    };
+  }
+
+/** 各源原始指标 → {key,label,value,text} 列表（详情页逐条展示，不做跨源加权） */
+const METRIC_SPEC = {
+  points: { label: '点赞', ico: '▲' },
+  comments: { label: '评论', ico: '💬' },
+  upvotes: { label: '赞', ico: '▲' },
+  score: { label: '得分', ico: '◆' },
+  likes: { label: '点赞', ico: '👍' },
+  rts: { label: '转发', ico: '🔁' },
+  replies: { label: '回复', ico: '↩' },
+  views: { label: '浏览', ico: '👁' },
+  stars: { label: 'Star', ico: '⭐' },
+  stars_today: { label: '今日新增', ico: '＋' },
+  forks: { label: 'Fork', ico: '⑂' },
+  // B站
+  like: { label: '点赞', ico: '👍' },
+  coin: { label: '投币', ico: '🪙' },
+  fav: { label: '收藏', ico: '⭐' },
+  share: { label: '转发', ico: '🔁' },
+  reply: { label: '评论', ico: '💬' },
+  danmaku: { label: '弹幕', ico: '💭' },
+  view: { label: '播放', ico: '▶' },
+};
+
+/** 各源指标的展示优先级（GitHub 只认当日新增；B站把播放量排在最后） */
+export const METRIC_ORDER = {
+  gh_trending: ['stars_today', 'stars', 'forks'],
+  gh_search: ['stars', 'forks'],
+  bilibili: ['like', 'coin', 'fav', 'share', 'reply', 'danmaku', 'view'],
+  bilibili_hot: ['like', 'coin', 'fav', 'share', 'reply', 'danmaku', 'view'],
+};
+const DEFAULT_METRIC_ORDER = ['points', 'likes', 'upvotes', 'score', 'stars', 'comments', 'rts', 'replies', 'views'];
+
+export function fmtNum(n) {
+  const v = Number(n) || 0;
+  // 中文语境用 万/亿（B站播放动辄百万，若按 k 会显示成难读的 "1834k"）
+  if (v >= 1e8) return `${trimZero(v / 1e8)}亿`;
+  if (v >= 1e4) return `${trimZero(v / 1e4)}万`;
+  return String(v);
+}
+
+const trimZero = (x) => {
+  const s = x.toFixed(1);
+  return s.endsWith('.0') ? s.slice(0, -2) : s;
+};
+
+export function metricList(metrics, source = '') {
+  const order = METRIC_ORDER[source] || DEFAULT_METRIC_ORDER;
+  return order
+    .filter((k) => Number(metrics?.[k]) > 0 && METRIC_SPEC[k])
+    .map((k) => ({ key: k, ...METRIC_SPEC[k], value: metrics[k], text: fmtNum(metrics[k]) }));
+}
+
+/**
+ * 卡片/列表上的互动徽章：按该源的传播力排序取前几个
+ * （GitHub 只认当日新增；B站点赞/投币/收藏/转发优先，播放量放最后）。
+ */
+export function labelMetrics(source, metrics, max = 3) {
+  return metricList(metrics, source).slice(0, max);
 }
 
 api.get('/items', (req, res) => {
@@ -261,8 +375,12 @@ api.get('/topics/:id', (req, res) => {
         .prepare(`SELECT * FROM items WHERE id IN (${ids.map(() => '?').join(',')})`)
         .all(...ids)
     : [];
-  res.json({ ...topic, items });
-});
+    res.json({
+      ...topic,
+      // 原始条目按发布/采集时间新→旧，最上面的就是"最新动态"
+      items: items.map(enrichItem).sort((a, b) => (Date.parse(b.published_at || b.collected_at) || 0) - (Date.parse(a.published_at || a.collected_at) || 0)),
+    });
+  });
 
 // ---------- notices ----------
 api.get('/notices', (req, res) => {

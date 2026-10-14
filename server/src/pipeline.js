@@ -1,5 +1,6 @@
 import db from './db.js';
 import { collectAll } from './collectors/index.js';
+import { enrichTrendingRepos } from './collectors/githubTrending.js';
 import { applyQualityGate, gates } from './quality.js';
 import { screenKeywords } from './ai/screen.js';
 import { clusterTopics } from './ai/cluster.js';
@@ -53,7 +54,22 @@ export async function runPipeline() {
 
   const { items, stats } = await collectAll(ctx);
 
-  // ---- 质量闸门（AI 之前）：硬门槛 + 质量分 + 同源近似去重，不达标不入库 ----
+    // ---- 补数据（走质量分之前）：trending 仓库补真实"建库时间" ----
+    // 只对本轮首次出现的仓库请求 GitHub API（已入库的 hash 直接跳过），限量调用避免触发限流。
+    try {
+      const hashRows = items.length
+        ? db
+            .prepare(`SELECT raw_hash FROM items WHERE raw_hash IN (${items.map(() => '?').join(',')})`)
+            .all(...items.map((i) => i.raw_hash))
+        : [];
+      const knownHashes = new Set(hashRows.map((r) => r.raw_hash));
+      const n = await enrichTrendingRepos(items, { knownHashes, log: ctx.log });
+      if (n) console.log(`[collect:gh_trending] 补建库时间 ${n} 个仓库`);
+    } catch (e) {
+      console.warn('[collect:gh_trending] 补建库时间失败（忽略）:', e.message);
+    }
+
+    // ---- 质量闸门（AI 之前）：硬门槛 + 质量分 + 同源近似去重，不达标不入库 ----
   const g = gates();
   const { passed, blocked } = applyQualityGate(items, { g });
   const blockedStats = {};

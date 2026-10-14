@@ -28,7 +28,8 @@ export default function Settings({ refreshScan, showToast }) {
   const [minScore, setMinScore] = useState(70);
   const [gates, setGates] = useState({
     hnPoints: 30, hnComments: 15, hfUpvotes: 30, ghStarsToday: 50,
-    ghSearchStars: 100, redditScore: 200, lobstersScore: 20, twitterLikes: 50, minQuality: 60, maxAgeDays: 14,
+      ghSearchStars: 100, redditScore: 200, lobstersScore: 20, twitterLikes: 50, biliScore: 500,
+      minQuality: 60, maxAgeDays: 14,
     authHn: 100, authReddit: 800, authTwitter: 500, authLobsters: 80, authGhTrending: 500, authGhSearch: 500, authHfPapers: 150,
   });
   const [emailOn, setEmailOn] = useState(true);
@@ -55,7 +56,8 @@ export default function Settings({ refreshScan, showToast }) {
         redditScore: s['gates.redditScore'] ?? gv.redditScore,
         lobstersScore: s['gates.lobstersScore'] ?? gv.lobstersScore,
         twitterLikes: s['gates.twitterLikes'] ?? gv.twitterLikes,
-        minQuality: s['gates.minQuality'] ?? gv.minQuality,
+                biliScore: s['gates.biliScore'] ?? gv.biliScore,
+                minQuality: s['gates.minQuality'] ?? gv.minQuality,
         maxAgeDays: s['gates.maxAgeDays'] ?? gv.maxAgeDays,
         authHn: s['gates.authHn'] ?? gv.authHn,
         authReddit: s['gates.authReddit'] ?? gv.authReddit,
@@ -64,6 +66,7 @@ export default function Settings({ refreshScan, showToast }) {
         authGhTrending: s['gates.authGhTrending'] ?? gv.authGhTrending,
         authGhSearch: s['gates.authGhSearch'] ?? gv.authGhSearch,
         authHfPapers: s['gates.authHfPapers'] ?? gv.authHfPapers,
+        authBili: s['gates.authBili'] ?? gv.authBili,
       }));
       setEmailOn(s['notify.email.enabled'] !== false);
       setPushOn(s['notify.webpush.enabled'] !== false);
@@ -250,6 +253,7 @@ export default function Settings({ refreshScan, showToast }) {
             <GatePairRow label="GitHub Trending（当日新增星）" entry="ghStarsToday" auth="authGhTrending" v={gates} set={setGates} />
             <GatePairRow label="GitHub 新库（stars+forks×2）" entry="ghSearchStars" auth="authGhSearch" v={gates} set={setGates} />
             <GatePairRow label="HF Papers（upvotes）" entry="hfUpvotes" auth="authHfPapers" v={gates} set={setGates} />
+            <GatePairRow label="B站（点赞+投币×2+收藏×3+转发×4+弹幕+评论×1.5+log₁₀播放×30）" entry="biliScore" auth="authBili" v={gates} set={setGates} />
             <div className="field">
               <label>HN 评论数兜底（评论再多也算深度讨论）</label>
               <input type="number" min="0" value={gates.hnComments} onChange={(e) => setGates({ ...gates, hnComments: Number(e.target.value) })} />

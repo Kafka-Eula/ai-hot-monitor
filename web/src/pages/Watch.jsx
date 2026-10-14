@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, fmtAgo, SOURCE_LABEL } from '../lib/api.js';
+import { api, fmtAgo, SOURCE_LABEL, NO_DATE_NOTE } from '../lib/api.js';
 
 export default function Watch({ pollTick, scanning, showToast }) {
   const [kws, setKws] = useState([]);
@@ -159,11 +159,23 @@ export default function Watch({ pollTick, scanning, showToast }) {
                   </a>
                   <div className="hit-meta">
                     {SOURCE_LABEL[h.source] || h.source}
-                    {h.author ? ` · ${h.author}` : ''} · {fmtAgo(h.published_at || h.screened_at)}
-                    {h.source_tier === 1 && <span style={{ color: '#34d399' }}> · ✓官方一手</span>}
-                    {h.engagement > 0 && <span> · {Math.round(h.engagement)} 互动</span>}
-                    {h.confidence ? <span className="conf"> · 置信 {Math.round(h.confidence * 100)}%</span> : null}
-                  </div>
+                                      {h.author_label ? ` · ${h.author_label}` : ''}
+                                      {h.host ? <span style={{ opacity: 0.65 }}> · {h.host}</span> : ''}
+                                      {h.has_published ? <span> · 发布于 {fmtAgo(h.published_at)}</span> : <span style={{ opacity: 0.6 }}> · {NO_DATE_NOTE}</span>}
+                                      {h.source_tier === 1 && <span style={{ color: '#34d399' }}> · ✓官方一手</span>}
+                                      {h.labels?.length > 0 && (
+                                        <span className="hm-inline">
+                                          {h.labels.map((m) => (
+                                            <i key={m.key} title={m.label}>
+                                              {m.ico}
+                                              {m.text}
+                                            </i>
+                                          ))}
+                                        </span>
+                                      )}
+                                      {h.engagement > 0 && <span style={{ opacity: 0.7 }}> · 传播力 {Math.round(h.engagement)}</span>}
+                                      {h.confidence ? <span className="conf"> · 置信 {Math.round(h.confidence * 100)}%</span> : null}
+                                    </div>
                 </div>
               </div>
               {h.reason && (

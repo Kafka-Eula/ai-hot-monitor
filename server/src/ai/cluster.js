@@ -1,7 +1,7 @@
 import db, { getSetting } from '../db.js';
 import { config } from '../config.js';
 import { chatJSON } from './openrouter.js';
-import { evidenceOf, capScore, hasNotifyEvidence, weightedEngagement, isViral, isOfficialHost, isAuthorityHost, isDeniedHost, normalizeHost } from '../quality.js';
+import { evidenceOf, capScore, hasNotifyEvidence, weightedEngagement, isViral, isOfficialHost, isAuthorityHost, isDeniedHost, isPlatformHost, normalizeHost, summarizeSources } from '../quality.js';
 
 const SYSTEM = `你是 AI 领域热点分析师。给定监控范围（scope）与一批来自多个信息源的内容条目（含既有热点话题列表），完成聚类与评分。
 
@@ -94,27 +94,33 @@ export async function clusterTopics(newItemIds, onProgress) {
     // 证据基于该话题**全部**条目（含历史轮次入库的），而非仅本批。
     // 不取 items.engagement 列：历史行是旧"取最大值"口径，统一按加权口径从 metrics 重算
     const rows = db
-      .prepare(`SELECT source,url,host,metrics FROM items WHERE id IN (${allIds.map(() => '?').join(',')})`)
+        .prepare(`SELECT source,url,host,metrics,published_at,author,title FROM items WHERE id IN (${allIds.map(() => '?').join(',')})`)
       .all(...allIds);
     const ev = evidenceOf(rows);
-    const capped = capScore(Number(t.score) || 0, ev);
-    const merged = JSON.stringify(allIds);
+      // 卡片展示用：最权威 1~2 个来源 + 原始发布轴 + 最热条目的原始互动指标
+      const src = summarizeSources(rows);
+      const capped = capScore(Number(t.score) || 0, ev);
+      const merged = JSON.stringify(allIds);
 
-    if (prev) {
-      // 证据累积后重新封顶：历史虚高分会被拉回证据允许的上限
-      const recheck = capScore(Math.max(prev.score, capped.score), ev);
-      db.prepare(
-        `UPDATE topics SET title=?, summary_zh=?, why_hot=?, score=?, item_ids=?, last_updated=?, scope_id=COALESCE(?, scope_id),
-         source_count=?, host_count=?, has_official=?, viral_count=?, evidence_tier=?, sources=? WHERE id=?`
-      ).run(
-        t.title, t.summary_zh, t.why_hot, recheck.score, merged, now, t.scope_id ?? null,
-        ev.source_count, ev.host_count, ev.has_official, ev.viral_count, recheck.tier, JSON.stringify(ev.sources), prev.id
-      );
+      if (prev) {
+        // 证据累积后重新封顶：历史虚高分会被拉回证据允许的上限
+        const recheck = capScore(Math.max(prev.score, capped.score), ev);
+        db.prepare(
+          `UPDATE topics SET title=?, summary_zh=?, why_hot=?, score=?, item_ids=?, last_updated=?, scope_id=COALESCE(?, scope_id),
+           source_count=?, host_count=?, has_official=?, viral_count=?, evidence_tier=?, sources=?,
+           primary_host=?, primary_label=?, primary_url=?, primary_source=?, primary_tier=?, authority_count=?, top_metrics=?,
+           published_first=?, published_last=? WHERE id=?`
+        ).run(
+          t.title, t.summary_zh, t.why_hot, recheck.score, merged, now, t.scope_id ?? null,
+          ev.source_count, ev.host_count, ev.has_official, ev.viral_count, recheck.tier, JSON.stringify(ev.sources),
+          src.primaryHost, src.primaryLabel, src.primaryUrl, src.primarySource, src.primaryTier, src.authorityCount,
+          JSON.stringify(src.metrics || {}), src.publishedFirst, src.publishedLast, prev.id
+        );
       // 此前未达通知条件、现在满足 → 补发一次（按 prev 条目精确重算，避免重复轰炸）
       let prevOk = false;
       if (prevIds.length) {
         const prevRows = db
-          .prepare(`SELECT source,url,host,metrics FROM items WHERE id IN (${prevIds.map(() => '?').join(',')})`)
+                .prepare(`SELECT source,url,host,metrics,published_at,author,title FROM items WHERE id IN (${prevIds.map(() => '?').join(',')})`)
           .all(...prevIds);
         prevOk = prev.score >= minScore && hasNotifyEvidence(evidenceOf(prevRows));
       }
@@ -124,26 +130,36 @@ export async function clusterTopics(newItemIds, onProgress) {
     } else {
       const r = db
         .prepare(
-          `INSERT INTO topics(scope_id,title,summary_zh,why_hot,score,item_ids,first_seen,last_updated,cluster_key,source_count,host_count,has_official,viral_count,evidence_tier,sources)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-        )
-        .run(
-          t.scope_id ?? null,
-          t.title,
-          t.summary_zh,
-          t.why_hot,
-          capped.score,
-          merged,
+                `INSERT INTO topics(scope_id,title,summary_zh,why_hot,score,item_ids,first_seen,last_updated,cluster_key,source_count,host_count,has_official,viral_count,evidence_tier,sources,
+                   primary_host,primary_label,primary_url,primary_source,primary_tier,authority_count,top_metrics,published_first,published_last)
+                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+              )
+              .run(
+                t.scope_id ?? null,
+                t.title,
+                t.summary_zh,
+                t.why_hot,
+                capped.score,
+                merged,
           now,
-          now,
-          t.cluster_key,
-          ev.source_count,
-          ev.host_count,
-          ev.has_official,
-          ev.viral_count,
-          capped.tier,
-          JSON.stringify(ev.sources)
-        );
+                now,
+                t.cluster_key,
+                ev.source_count,
+                ev.host_count,
+                ev.has_official,
+                ev.viral_count,
+                capped.tier,
+                JSON.stringify(ev.sources),
+                src.primaryHost,
+                src.primaryLabel,
+                src.primaryUrl,
+                src.primarySource,
+                src.primaryTier,
+                src.authorityCount,
+                JSON.stringify(src.metrics || {}),
+                src.publishedFirst,
+                src.publishedLast
+              );
       topics++;
       if (capped.score >= minScore && hasNotifyEvidence(ev)) {
         newHot.push({
@@ -184,7 +200,8 @@ export async function clusterTopics(newItemIds, onProgress) {
             // 字段语义与提示词一致：official=域名是厂商官方（纯域名判定）
             official: isOfficialHost(h) ? 1 : 0,
             auth: isAuthorityHost(h) ? 1 : 0,
-            farm: isDeniedHost(h) ? 1 : 0,
+                        // 平台自身域名（bilibili.com / github.com…）不是"内容农场"，别让模型据此降分
+                        farm: !isPlatformHost(h) && isDeniedHost(h) ? 1 : 0,
             title: it.title.slice(0, 180),
             sum: (it.summary || '').slice(0, 240),
             author: it.author,

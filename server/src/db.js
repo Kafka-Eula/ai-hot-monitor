@@ -138,6 +138,8 @@ if (!cols.includes('source_tier')) db.exec('ALTER TABLE items ADD COLUMN source_
 if (!cols.includes('host')) db.exec("ALTER TABLE items ADD COLUMN host TEXT DEFAULT ''");
 if (!cols.includes('quality_flags')) db.exec("ALTER TABLE items ADD COLUMN quality_flags TEXT DEFAULT '[]'");
 db.exec('CREATE INDEX IF NOT EXISTS idx_items_quality ON items(quality_score)');
+// 话题列表需要按"最热条目"的反查（sources 筛选/来源统计），host 建索引避免全表扫
+db.exec('CREATE INDEX IF NOT EXISTS idx_items_host ON items(host)');
 
 const tcols = db.prepare("PRAGMA table_info(topics)").all().map((c) => c.name);
 if (!tcols.includes('source_count')) db.exec('ALTER TABLE topics ADD COLUMN source_count INTEGER DEFAULT 1');
@@ -147,6 +149,21 @@ if (!tcols.includes('viral_count')) db.exec('ALTER TABLE topics ADD COLUMN viral
 if (!tcols.includes('evidence_tier')) db.exec("ALTER TABLE topics ADD COLUMN evidence_tier TEXT DEFAULT ''");
 // 话题构成信息源（JSON 数组）：前端按源筛选/展示不再依赖"最近 N 条 items"反推
 if (!tcols.includes('sources')) db.exec("ALTER TABLE topics ADD COLUMN sources TEXT DEFAULT '[]'");
+// v1.4 来源精简与原始数据露出：
+// primary_*  = 该话题最权威的 1~2 个来源（域名/品牌名/原文直链），卡片只显示它，其余折叠为 +N
+// authority_count = 权威媒体/官方域名总数（展示 "+N" 的被折叠数量）
+// top_metrics     = 话题内最热条目的**原始**互动指标 JSON（点赞/评论/浏览/star/upvotes…）
+// published_first/last = 基于条目 published_at 的原始发布轴（话题 last_updated 是聚类时间，会误导新旧判断）
+if (!tcols.includes('primary_host')) db.exec("ALTER TABLE topics ADD COLUMN primary_host TEXT DEFAULT ''");
+if (!tcols.includes('primary_label')) db.exec("ALTER TABLE topics ADD COLUMN primary_label TEXT DEFAULT ''");
+if (!tcols.includes('primary_url')) db.exec("ALTER TABLE topics ADD COLUMN primary_url TEXT DEFAULT ''");
+if (!tcols.includes('primary_source')) db.exec("ALTER TABLE topics ADD COLUMN primary_source TEXT DEFAULT ''");
+// 4=官方一手 / 3=权威媒体 / 2=策展社区 / 1=其他（前端据此给来源徽章配色）
+if (!tcols.includes('primary_tier')) db.exec('ALTER TABLE topics ADD COLUMN primary_tier INTEGER DEFAULT 0');
+if (!tcols.includes('authority_count')) db.exec('ALTER TABLE topics ADD COLUMN authority_count INTEGER DEFAULT 0');
+if (!tcols.includes('top_metrics')) db.exec("ALTER TABLE topics ADD COLUMN top_metrics TEXT DEFAULT '{}'");
+if (!tcols.includes('published_first')) db.exec("ALTER TABLE topics ADD COLUMN published_first TEXT DEFAULT ''");
+if (!tcols.includes('published_last')) db.exec("ALTER TABLE topics ADD COLUMN published_last TEXT DEFAULT ''");
 
 // ---------- settings helpers ----------
 const getStmt = db.prepare('SELECT value FROM settings WHERE key=?');
