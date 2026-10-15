@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { summarizeSources, weightedEngagement, authorityRank, gates, sourceThresholds, isHardGated, SOCIAL_SOURCES, isPlatformHost, CHANNEL_SOURCES, evidenceOf, combineScore, engagementScore } from '../src/quality.js';
+import { summarizeSources, weightedEngagement, authorityRank, gates, sourceThresholds, isHardGated, SOCIAL_SOURCES, isPlatformHost, CHANNEL_SOURCES, evidenceOf, combineScore, engagementScore, subjectTokens, itemMatchesSubject } from '../src/quality.js';
 // 前端与后端共用同一套展示口径（指标顺序/徽章），但仓库没有前端测试运行器，
 // 这里直接 import web 侧模块做断言，保证"卡片怎么显示"也被测到。
 import { metricsList, SOURCE_LABEL, METRIC_LABEL } from '../../web/src/lib/api.js';
@@ -124,4 +124,26 @@ test('evidenceOf：累计全话题加权互动总量（含B站多指标）', () 
   const ev = evidenceOf(items);
   // B站：1000 + 500×3 + 100×1.5 + 50 + log10(100001)×30 ≈ 2855；新闻类贡献 0
   assert.ok(ev.engagement_total > 2800 && ev.engagement_total < 2900, `实际 ${ev.engagement_total}`);
+});
+
+// ---------------- v1.6 话题-条目主体相关性 ----------------
+
+test('subjectTokens：从话题标题提取拉丁主体，泛词与纯中文不算', () => {
+  assert.deepEqual(subjectTokens('GPT-6 系列发布及性能下降调查'), ['gpt6']);
+  // 花式连字符 U+2011 折叠："GPT‑6 Sol" 应能提出 gpt6/sol
+  assert.ok(subjectTokens('Introducing GPT\u20116 Sol and Luna').includes('gpt6'));
+  // 纯中文标题提不出 → 空（跳过校验）
+  assert.deepEqual(subjectTokens('阿里千问发布个人硬件新品'), []);
+  // 泛词不算主体
+  assert.deepEqual(subjectTokens('New AI Model Release'), []);
+});
+
+test('itemMatchesSubject：DeepSeek宕机赔偿 不应并入 GPT-6 话题', () => {
+  const tokens = subjectTokens('GPT-6 系列发布及性能下降调查'); // ['gpt6']
+  assert.equal(itemMatchesSubject({ title: 'OpenAI称GPT-6.1 Sol Codex性能下降', summary: '' }, tokens), true);
+  assert.equal(itemMatchesSubject({ title: 'Introducing GPT‑6 Sol and Luna', summary: '' }, tokens), true); // 花式连字符
+  assert.equal(itemMatchesSubject({ title: 'DeepSeek 服务异常 5 小时，7 天内金额全部返还', summary: 'OpenCode 可免费使用 DeepSeek V4.1 Flash' }, tokens), false);
+  assert.equal(itemMatchesSubject({ title: '【星际争霸2】Deepseek V4.1 大战专家难度人族', summary: '' }, tokens), false);
+  // 无 token（纯中文话题）→ 恒过，不误杀
+  assert.equal(itemMatchesSubject({ title: '任何条目' }, []), true);
 });

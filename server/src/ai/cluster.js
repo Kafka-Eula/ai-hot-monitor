@@ -1,13 +1,18 @@
 import db, { getSetting, topicColumns } from '../db.js';
 import { config } from '../config.js';
 import { chatJSON } from './openrouter.js';
-import { evidenceOf, capScore, combineScore, hasNotifyEvidence, weightedEngagement, isViral, isOfficialHost, isAuthorityHost, isDeniedHost, isPlatformHost, normalizeHost, summarizeSources } from '../quality.js';
+import { evidenceOf, capScore, combineScore, hasNotifyEvidence, weightedEngagement, isViral, isOfficialHost, isAuthorityHost, isDeniedHost, isPlatformHost, normalizeHost, summarizeSources, subjectTokens, itemMatchesSubject } from '../quality.js';
 
 /** 聚类系统提示词（导出供模型评测/调试复用） */
 export const SYSTEM = `你是 AI 领域热点分析师。给定监控范围（scope）与一批来自多个信息源的内容条目（含既有热点话题列表），完成聚类与评分。
 
 1. 聚类：把讨论**同一事件/产品**的条目合并为一个话题（跨信息源合并：HN + 官方博客 + 媒体都在说同一个模型发布 → 一个话题）。
    与既有话题重复时**沿用既有 cluster_key**并把新条目并入 item_ids；同一产品的不同事件（如"发布"与"故障调查"）可合并为同一话题，但要在摘要里说清是几件事。
+   **主体一致性硬规则**：话题内每条标题/摘要都必须明确提及该话题的**同一主体**（同一产品名/公司名/事件对象）。
+   以下情况**禁止**并入既有话题，应单独立话题或不归类：
+   - 主体不同（"GPT-6 宕机赔偿" ≠ "DeepSeek 宕机赔偿"，即使事件类型相同）；
+   - 顺带提及（"AI圈诸神之战"盘点里一句带过 GPT-6，主体其实是别的事）；
+   - 二创/娱乐内容（用模型生成的歌曲、游戏视频、手书），它们消费的是模型名而不是模型事件本身。
 
 2. 每个话题输出：
    - cluster_key：简短稳定的英文标识（如 "gpt6-release"），同一事件跨轮次必须一致；
@@ -90,7 +95,25 @@ export async function clusterTopics(newItemIds, onProgress) {
       const WITH_SCORE_COLS = topicColumns.has_base_score && topicColumns.has_engagement_total;
       const prev = db.prepare('SELECT * FROM topics WHERE cluster_key=?').get(t.cluster_key);
     const prevIds = prev ? JSON.parse(prev.item_ids || '[]') : [];
-    const allIds = [...new Set([...prevIds, ...validIds])];
+      // ---- 主体相关性硬校验（防"话题黑洞"，2026-10 实测：GPT-6 话题曾混入
+      // DeepSeek宕机赔偿/星际争霸/千问开店等 60 条不相关内容）----
+      // AI 聚类只看语义相似，"AI 圈大事盘点"类条目什么都能沾边。这里用代码兜底：
+      // 话题标题/cluster_key 能提取出拉丁主体（gpt6/deepseek…）时，
+      // 条目标题+摘要必须命中其一才允许并入；纯中文主体提取不到则跳过（宁放过不误杀）。
+      const tokens = subjectTokens(t.title);
+      const allWant = [...new Set([...prevIds, ...validIds])];
+      const idRow = new Map(allItems.map((it) => [it.id, it]));
+      // 历史条目从库里补查文本（本批 allItems 只含新条目）
+      const histIds = allWant.filter((id) => !idRow.has(id));
+      if (histIds.length) {
+        for (const r of db.prepare(`SELECT id, title, summary FROM items WHERE id IN (${histIds.map(() => '?').join(',')})`).all(...histIds)) {
+          idRow.set(r.id, r);
+        }
+      }
+      const allIds = allWant.filter((id) => itemMatchesSubject(idRow.get(id) || {}, tokens));
+      const dropped = allWant.length - allIds.length;
+      if (dropped) console.log(`[ai] 主体校验：话题「${t.title.slice(0, 20)}」剔除 ${dropped} 条不相关条目（主体: ${tokens.join('/') || '无'}）`);
+      if (!allIds.length) return;
     // 证据基于该话题**全部**条目（含历史轮次入库的），而非仅本批。
     // 不取 items.engagement 列：历史行是旧"取最大值"口径，统一按加权口径从 metrics 重算
     const rows = db

@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../src/config.js';
 import db from '../src/db.js';
-import { applyQualityGate, gates, evidenceOf, capScore, combineScore, summarizeSources } from '../src/quality.js';
+import { applyQualityGate, gates, evidenceOf, capScore, combineScore, summarizeSources, subjectTokens, itemMatchesSubject } from '../src/quality.js';
 import { fetchRepoMeta } from '../src/collectors/githubTrending.js';
 import { sleep } from '../src/util/http.js';
 
@@ -131,7 +131,7 @@ if (!DRY) {
 
 // ---- 3) topics 证据重算、封顶降分、清理 ----
 const topics = db.prepare('SELECT * FROM topics').all();
-const tStats = { updated: 0, deleted: 0, demoted: 0, orphaned: 0, enriched: 0 };
+const tStats = { updated: 0, deleted: 0, demoted: 0, orphaned: 0, enriched: 0, itemsDetached: 0 };
 const delTopic = db.prepare('DELETE FROM topics WHERE id=?');
 const updTopic = db.prepare(
   `UPDATE topics SET score=?, base_score=?, engagement_total=?, item_ids=?, source_count=?, host_count=?, has_official=?, viral_count=?, evidence_tier=?, sources=?,
@@ -142,7 +142,7 @@ const updTopic = db.prepare(
 db.transaction(() => {
   for (const t of topics) {
     const ids = JSON.parse(t.item_ids || '[]');
-    const alive = ids.filter((id) => !delItemIds.has(id));
+    let alive = ids.filter((id) => !delItemIds.has(id));
     if (!alive.length) {
       tStats.deleted++;
       tStats.orphaned++;
@@ -151,14 +151,32 @@ db.transaction(() => {
     }
     const rows = db
       // 不带 engagement 列：让 evidenceOf 按加权口径从 metrics 重算（旧列是"取最大值"口径）
-      .prepare(`SELECT source,url,host,metrics,published_at,author,title FROM items WHERE id IN (${alive.map(() => '?').join(',')})`)
+      .prepare(`SELECT id,source,url,host,metrics,published_at,author,title,summary FROM items WHERE id IN (${alive.map(() => '?').join(',')})`)
       .all(...alive);
-    const ev = evidenceOf(rows);
-        // v1.5：score 由「AI 基线 + 互动分量」合成（用户要求互动越多排名越靠前）。
-        // 基线取库里的 base_score；老数据没有该列时退回用旧 score 当基线，避免把历史分归零。
-        const base = Number(t.base_score) > 0 ? Number(t.base_score) : Number(t.score) || 0;
-        const capped = combineScore(base, ev.engagement_total, ev);
-        const src = summarizeSources(rows);
+    // v1.6 主体相关性硬校验：剔除历史上被 AI 误并进话题的无关条目（防"话题黑洞"）。
+    // 纯中文标题提不出拉丁主体时跳过（宁放过不误杀）。
+    const tokens = subjectTokens(t.title);
+    let kept = rows;
+    if (tokens.length) {
+      const okIds = new Set(rows.filter((r) => itemMatchesSubject(r, tokens)).map((r) => r.id));
+      const removed = rows.length - okIds.size;
+      if (removed) {
+        tStats.itemsDetached += removed;
+        alive = alive.filter((id) => okIds.has(id));
+        kept = kept.filter((r) => okIds.has(r.id));
+        if (!alive.length) {
+          tStats.deleted++;
+          if (!DRY) delTopic.run(t.id);
+          console.log(`  [detach] ${t.cluster_key}: 全部 ${rows.length} 条均与主体不相关 → 删除话题`);
+          continue;
+        }
+        console.log(`  [detach] ${t.cluster_key}: 剔除 ${removed}/${rows.length} 条与主体「${tokens.join('/')}」无关的条目`);
+      }
+    }
+    const ev = evidenceOf(kept);
+    const base = Number(t.base_score) > 0 ? Number(t.base_score) : Number(t.score) || 0;
+    const capped = combineScore(base, ev.engagement_total, ev);
+    const src = summarizeSources(kept);
     if (capped.capped) tStats.demoted++;
     // 仅剩 1 条且非官方、封顶后仍低于 40 → 视为噪音话题删除
     if (alive.length === 1 && !ev.has_official && capped.score < 40) {
@@ -169,22 +187,22 @@ db.transaction(() => {
     tStats.updated++;
     if (!DRY) {
       updTopic.run(
-              capped.score, capped.base, ev.engagement_total, JSON.stringify(alive), ev.source_count, ev.host_count, ev.has_official, ev.viral_count, capped.tier,
-              JSON.stringify(ev.sources), src.primaryHost, src.primaryLabel, src.primaryUrl, src.primarySource, src.primaryTier,
-              src.authorityCount, JSON.stringify(src.metrics || {}), src.publishedFirst, src.publishedLast, t.id
+        capped.score, capped.base, ev.engagement_total, JSON.stringify(alive), ev.source_count, ev.host_count, ev.has_official, ev.viral_count, capped.tier,
+        JSON.stringify(ev.sources), src.primaryHost, src.primaryLabel, src.primaryUrl, src.primarySource, src.primaryTier,
+        src.authorityCount, JSON.stringify(src.metrics || {}), src.publishedFirst, src.publishedLast, t.id
       );
     }
     if (!t.primary_label && src.primaryLabel) tStats.enriched++;
     if (capped.capped) {
-          console.log(`  [cap] ${t.cluster_key}: ${t.score} → ${capped.score}（互动${ev.engagement_total} 基线${capped.base} 互动分量${capped.engagement}）`);
-        } else {
-          console.log(`  [score] ${t.cluster_key}: ${t.score} → ${capped.score}（互动${ev.engagement_total} → 分量${capped.engagement}/100，基线${capped.base}）`);
-        }
+      console.log(`  [cap] ${t.cluster_key}: ${t.score} → ${capped.score}（互动${ev.engagement_total} 基线${capped.base} 互动分量${capped.engagement}）`);
+    } else {
+      console.log(`  [score] ${t.cluster_key}: ${t.score} → ${capped.score}（互动${ev.engagement_total} → 分量${capped.engagement}/100，基线${capped.base}）`);
+    }
   }
 })();
 
 console.log(
-  `[backfill] topics: 更新 ${tStats.updated} / 删除 ${tStats.deleted}（无存活条目 ${tStats.orphaned}）/ 降分 ${tStats.demoted} / 补来源与发布轴 ${tStats.enriched}`
+  `[backfill] topics: 更新 ${tStats.updated} / 删除 ${tStats.deleted}（无存活条目 ${tStats.orphaned}）/ 降分 ${tStats.demoted} / 补来源与发布轴 ${tStats.enriched} / 剔除无关条目 ${tStats.itemsDetached}`
 );
 
 // ---- 3) 结果对比 ----

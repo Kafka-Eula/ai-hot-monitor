@@ -971,6 +971,44 @@ export function isPlatformHost(host) {
 return hostMatch(host, PLATFORM_HOSTS);
 }
 
+// ---------------- 话题-条目主体相关性（防"话题黑洞"） ----------------
+
+/**
+ * 提取话题标题里的"主体 token"（gpt6、deepseek、muse…）。
+ *
+ * 只用标题、不用 cluster_key：cluster_key 是 AI 生成的英文标识，而条目多为中文标题，
+ * 用英文 key 去匹配中文文本会大面积误杀。标题提不出拉丁词（纯中文话题）→ 返回空数组，
+ * 调用方跳过校验（宁放过不误杀）。
+ *
+ * 统一把 U+2010~U+2015 这类花式连字符（OpenAI 标题常用 "GPT‑6"）折成 ASCII，
+ * 否则 "GPT‑6" 只能提出弱 token "gpt"。
+ */
+export function subjectTokens(title) {
+  const norm = String(title || '').replace(/[\u2010-\u2015\u2212]/g, '-');
+  const out = new Set();
+  for (const w of norm.toLowerCase().match(/[a-z][a-z0-9]*(?:[.\-_][a-z0-9]+)*/g) || []) {
+    const compact = w.replace(/[.\-_]/g, '');
+    if (compact.length >= 3 && !SUBJECT_STOP.has(compact)) out.add(compact);
+  }
+  return [...out];
+}
+
+/** 泛词不作主体：这些词几乎出现在所有条目里，匹配上不代表相关 */
+const SUBJECT_STOP = new Set([
+  'the', 'and', 'for', 'with', 'from', 'new', 'release', 'releases', 'update', 'updates',
+  'model', 'models', 'ai', 'api', 'vs', 'via', 'its', 'how', 'what', 'why', 'top', 'best',
+  'series', 'pro', 'flash', 'version', 'launch', 'says', 'just', 'now', 'official',
+]);
+
+/** 条目文本是否命中话题主体（任一 token 以"去分隔符压缩"后子串匹配；大小写/连字符差异均可命中） */
+export function itemMatchesSubject(item, tokens) {
+  if (!tokens.length) return true; // 无拉丁主体可提取：不做硬校验
+  const text = String(`${item.title || ''} ${item.summary || ''}`)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, ''); // 去除连字符/空格/标点（含 U+2011 这类花式连字符）
+  return tokens.some((tk) => text.includes(tk));
+}
+
 /** 该条目的原始指标是否有意义（新闻/官宣源没有互动接口，恒为 0） */
 export function metricCount(source, metrics) {
   const m = parseMetricsObj(metrics);
