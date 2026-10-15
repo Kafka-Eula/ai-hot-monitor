@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, fmtAgo, fmtShort, freshness, metricsList, SOURCE_LABEL, NO_DATE_NOTE } from '../lib/api.js';
+import { api, fmtAgo, fmtShort, fmtNum, freshness, metricsList, SOURCE_LABEL, NO_DATE_NOTE } from '../lib/api.js';
 import RadarScope from '../components/RadarScope.jsx';
 import TopicFilters, { loadFilters, DEFAULT_FILTERS } from '../components/TopicFilters.jsx';
 import { BackgroundBeams } from '../components/ui/background-beams.jsx';
