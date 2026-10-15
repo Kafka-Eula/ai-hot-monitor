@@ -29,7 +29,7 @@ export default function Settings({ refreshScan, showToast }) {
   const [gates, setGates] = useState({
     hnPoints: 30, hnComments: 15, hfUpvotes: 30, ghStarsToday: 50,
       ghSearchStars: 100, redditScore: 200, lobstersScore: 20, twitterLikes: 50, biliScore: 500,
-      minQuality: 60, maxAgeDays: 14,
+      minQuality: 60, maxAgeDays: 14, engagementWeight: 0.4, engagementFull: 5000,
     authHn: 100, authReddit: 800, authTwitter: 500, authLobsters: 80, authGhTrending: 500, authGhSearch: 500, authHfPapers: 150,
   });
   const [emailOn, setEmailOn] = useState(true);
@@ -59,6 +59,8 @@ export default function Settings({ refreshScan, showToast }) {
                 biliScore: s['gates.biliScore'] ?? gv.biliScore,
                 minQuality: s['gates.minQuality'] ?? gv.minQuality,
         maxAgeDays: s['gates.maxAgeDays'] ?? gv.maxAgeDays,
+                        engagementWeight: s['gates.engagementWeight'] ?? gv.engagementWeight,
+                        engagementFull: s['gates.engagementFull'] ?? gv.engagementFull,
         authHn: s['gates.authHn'] ?? gv.authHn,
         authReddit: s['gates.authReddit'] ?? gv.authReddit,
         authTwitter: s['gates.authTwitter'] ?? gv.authTwitter,
@@ -285,18 +287,57 @@ export default function Settings({ refreshScan, showToast }) {
               <div className="hint">修复"7 月的旧帖又被抓进来"。GitHub Trending / HF 每日论文为快照榜源，不受此限。当前 {gates.maxAgeDays} 天。</div>
             </div>
             <button className="btn" disabled={saving} onClick={() => save({ 'gates.minQuality': gates.minQuality, 'gates.maxAgeDays': gates.maxAgeDays })}>
-              保存质量分门槛
-            </button>
-            <div className="hint" style={{ marginTop: 12 }}>
-              话题分数受<strong>证据分级封顶</strong>：
-              官方一手 / ≥2 家权威媒体交叉 → 不封顶（100，可通知）；
-              纯社交但 ≥2 条达爆款门槛 → 封顶 80（可通知）；
-              单条爆款孤证 → 65；未达爆款门槛 → 60（均不通知）。
-              同源近似标题自动去重，避免刷屏挤占 AI 预算。
-            </div>
-          </div>
-        </div>
-      </div>
+                          保存质量分门槛
+                        </button>
+                        <div className="hint" style={{ marginTop: 12 }}>
+                          话题分数受<strong>证据分级封顶</strong>：
+                          官方一手 / ≥2 家权威媒体交叉 → 不封顶（100，可通知）；
+                          纯社交但 ≥2 条达爆款门槛 → 封顶 80（可通知）；
+                          单条爆款孤证 → 65；未达爆款门槛 → 60（均不通知）。
+                          同源近似标题自动去重，避免刷屏挤占 AI 预算。
+                        </div>
+                      </div>
+                      <div className="panel">
+                        <div className="panel-h"><h3>话题热度分：互动权重</h3></div>
+                        <div className="hint" style={{ marginBottom: 10 }}>
+                          最终热度分 = <b>(1−w) × AI 事件量级 + w × 互动热度</b>。互动热度由话题内**全部条目**的加权互动总量
+                          做对数归一得出（B站/社交的观看·点赞·投币·收藏·转发·评论·弹幕都计入）。
+                          权重越高，互动多的话题排名越靠前；设为 0 即退回"纯 AI 评分"。
+                        </div>
+                        <div className="field">
+                          <label>互动权重 w（0~1）· 当前 {gates.engagementWeight}</label>
+                          <input
+                            type="range" min="0" max="1" step="0.05"
+                            value={gates.engagementWeight}
+                            onChange={(e) => setGates({ ...gates, engagementWeight: Number(e.target.value) })}
+                          />
+                          <div className="hint">
+                            默认 0.4：一条 7.8 万互动的 B站视频话题 ≈ 互动分量 77 分，足以压过 0 互动的官方发布。
+                          </div>
+                        </div>
+                        <div className="field">
+                          <label>互动基准尺度 · 10 倍该值 ≈ +40 分（对数曲线）</label>
+                          <input
+                            type="number" min="100" step="100"
+                            value={gates.engagementFull}
+                            onChange={(e) => setGates({ ...gates, engagementFull: Number(e.target.value) })}
+                          />
+                          <div className="hint">默认 1000。调小 → 中小话题也能拿到高互动分；调大 → 只有头部爆款才拉满。</div>
+                        </div>
+                        <button
+                          className="btn"
+                          disabled={saving}
+                          onClick={() => save({ 'gates.engagementWeight': gates.engagementWeight, 'gates.engagementFull': gates.engagementFull })}
+                        >
+                          保存互动权重
+                        </button>
+                        <div className="hint" style={{ marginTop: 12 }}>
+                          证据分级封顶仍然生效（官方一手/媒体交叉 ≤100、多源爆款 ≤80、孤证 ≤65），
+                          因此「单源孤证」不会因为互动高就绕过封顶；改权重后建议跑一次回填让历史话题重算。
+                        </div>
+                      </div>
+                    </div>
+                  </div>
 
       <div className="section">
         <div className="section-title">通知渠道</div>

@@ -370,10 +370,15 @@ function TopicCard({ t, onOpen }) {
     const badges = metricsList(tm.source, tm.values, 4);
   const fresh = freshness(t.published_first);
   const pubText = t.published_first ? fmtShort(t.published_first) : '';
+    // 热度分构成（hover 可看）：证明"高互动真的抬高了排名"
+    const scoreTip =
+      t.base_score || t.engagement_total
+        ? `热度 ${Math.round(t.score)} = AI 事件量级 ${Math.round(t.base_score || 0)}（权重 ${Math.round((1 - (t.engagement_weight ?? 0.4)) * 100)}%） + 互动热度 ${Math.round(t.engagement_score ?? 0)}（权重 ${Math.round((t.engagement_weight ?? 0.4) * 100)}%）\n全话题加权互动总量 ${fmtNum(t.engagement_total || 0)}`
+        : '综合热度分';
 
   return (
     <BentoCard className={`trow ${hot ? 'hot' : ''}`} highlight={hot ? '#E879F9' : '#22D3EE'} onClick={() => onOpen(t.id)}>
-      <div className="score">
+      <div className="score" title={scoreTip}>
         <b>{Math.round(t.score)}</b>
         <s>HEAT</s>
       </div>

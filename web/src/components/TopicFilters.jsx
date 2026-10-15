@@ -38,8 +38,9 @@ export function loadFilters() {
 }
 
 const SORT_OPTS = [
-  { v: 'score', label: '热度', hint: '按 AI 热度分从高到低' },
-  { v: 'updated', label: '最新', hint: '按最近更新时间的话题' },
+  { v: 'score', label: '热度', hint: '综合热度 = AI 事件量级 + 互动热度（互动越多排越前）' },
+  { v: 'engagement', label: '互动', hint: '只按互动量排序（观看/点赞/转发/收藏/评论）' },
+  { v: 'updated', label: '最新', hint: '按原始发布时间的最新动态' },
   { v: 'sources', label: '跨源', hint: '被多少个不同信息源报道' },
   { v: 'items', label: '条数', hint: '话题合并的原始条目数' },
 ];

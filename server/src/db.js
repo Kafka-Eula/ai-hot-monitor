@@ -164,6 +164,20 @@ if (!tcols.includes('authority_count')) db.exec('ALTER TABLE topics ADD COLUMN a
 if (!tcols.includes('top_metrics')) db.exec("ALTER TABLE topics ADD COLUMN top_metrics TEXT DEFAULT '{}'");
 if (!tcols.includes('published_first')) db.exec("ALTER TABLE topics ADD COLUMN published_first TEXT DEFAULT ''");
 if (!tcols.includes('published_last')) db.exec("ALTER TABLE topics ADD COLUMN published_last TEXT DEFAULT ''");
+// v1.5 热度分构成：base_score=AI 基线分（事件量级），engagement_total=全话题加权互动总量。
+// 两者按 weights 合成最终 score（见 quality.combineScore）——用户要求"互动越多排名越靠前"。
+if (!tcols.includes('base_score')) db.exec('ALTER TABLE topics ADD COLUMN base_score REAL DEFAULT 0');
+if (!tcols.includes('engagement_total')) db.exec('ALTER TABLE topics ADD COLUMN engagement_total REAL DEFAULT 0');
+
+/**
+ * topicColumns 一次缓存：cluster 写入前用它校验列是否存在。
+ * 若库里还没有 v1.5 的两列（例如老进程在写入），就自动退回不含新列的 SQL，
+ * 避免"列不存在"直接让整批聚类失败。
+ */
+export const topicColumns = {
+  has_base_score: tcols.includes('base_score'),
+  has_engagement_total: tcols.includes('engagement_total'),
+};
 
 // ---------- settings helpers ----------
 const getStmt = db.prepare('SELECT value FROM settings WHERE key=?');

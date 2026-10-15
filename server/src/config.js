@@ -89,6 +89,8 @@ export const SETTING_KEYS = [
   'gates.maxAgeDays',
   'gates.dedupThreshold',
   'gates.dedupEnabled',
-];
+    'gates.engagementWeight',
+    'gates.engagementFull',
+  ];
 
 export default config;

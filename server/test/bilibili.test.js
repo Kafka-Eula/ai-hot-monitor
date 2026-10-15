@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { summarizeSources, weightedEngagement, authorityRank, gates, sourceThresholds, isHardGated, SOCIAL_SOURCES, isPlatformHost, CHANNEL_SOURCES } from '../src/quality.js';
+import { summarizeSources, weightedEngagement, authorityRank, gates, sourceThresholds, isHardGated, SOCIAL_SOURCES, isPlatformHost, CHANNEL_SOURCES, evidenceOf, combineScore, engagementScore } from '../src/quality.js';
 // 前端与后端共用同一套展示口径（指标顺序/徽章），但仓库没有前端测试运行器，
 // 这里直接 import web 侧模块做断言，保证"卡片怎么显示"也被测到。
 import { metricsList, SOURCE_LABEL, METRIC_LABEL } from '../../web/src/lib/api.js';
@@ -79,4 +79,49 @@ test('展示口径：B站源名与指标标签齐备（前端不会显示成原�
   for (const k of ['like', 'coin', 'fav', 'share', 'reply', 'danmaku', 'view']) {
     assert.ok(METRIC_LABEL[k]?.label, `缺少指标标签: ${k}`);
   }
+});
+
+// ---------------- v1.5 热度分：互动作为并列主成分 ----------------
+
+test('互动分量：对数归一，互动越多分越高', () => {
+    assert.equal(engagementScore(0), 0);
+    assert.ok(engagementScore(2000) < engagementScore(20000)); // 2千 < 2万
+    assert.ok(engagementScore(20000) < engagementScore(100000)); // 2万 < 10万
+    assert.ok(engagementScore(100000) <= 100);
+});
+
+test('热度合成：高互动话题压过 0 互动的官方发布（用户核心诉求）', () => {
+  const official = { has_official: 1, authority_media_count: 1, viral_count: 0, social_only: 0 };
+  const social = { has_official: 0, authority_media_count: 1, viral_count: 2, social_only: 0 };
+  // 官方发布：AI 基线 94、互动 0
+  const a = combineScore(94, 0, official);
+  // B站爆款话题：AI 基线 82、互动 7.8 万
+  const b = combineScore(82, 78402, social);
+  assert.ok(b.score > a.score, `高互动(${b.score}) 应高于 0 互动官方(${a.score})`);
+  // 0 互动的官方发布会被拉低（互动分量 0 参与加权）
+  assert.ok(a.score < 94, `0 互动话题应从 94 下降，实际 ${a.score}`);
+  assert.equal(a.engagement, 0);
+});
+
+test('热度合成：w=0 时退回纯 AI 基线分', () => {
+  const ev = { has_official: 1, authority_media_count: 1, viral_count: 0, social_only: 0 };
+  const r = combineScore(88, 999999, ev, { ...gates(), engagementWeight: 0 });
+  assert.equal(r.score, 88);
+});
+
+test('热度合成：证据封顶仍然生效（互动高不能绕过孤证封顶）', () => {
+  const singleViral = { has_official: 0, authority_media_count: 0, viral_count: 1, social_only: 1 };
+  const r = combineScore(100, 1e6, singleViral);
+  assert.equal(r.score, 65); // single_viral 上限
+  assert.equal(r.tier, 'single_viral');
+});
+
+test('evidenceOf：累计全话题加权互动总量（含B站多指标）', () => {
+  const items = [
+    { source: 'bilibili', host: 'bilibili.com', url: 'https://www.bilibili.com/video/BV1', metrics: JSON.stringify({ view: 100000, like: 1000, fav: 500, reply: 100, danmaku: 50 }) },
+    { source: 'news_search', host: 'techcrunch.com', url: 'https://techcrunch.com/a', metrics: '{}' },
+  ];
+  const ev = evidenceOf(items);
+  // B站：1000 + 500×3 + 100×1.5 + 50 + log10(100001)×30 ≈ 2855；新闻类贡献 0
+  assert.ok(ev.engagement_total > 2800 && ev.engagement_total < 2900, `实际 ${ev.engagement_total}`);
 });

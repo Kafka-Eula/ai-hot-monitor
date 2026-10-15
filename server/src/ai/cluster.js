@@ -1,9 +1,10 @@
-import db, { getSetting } from '../db.js';
+import db, { getSetting, topicColumns } from '../db.js';
 import { config } from '../config.js';
 import { chatJSON } from './openrouter.js';
-import { evidenceOf, capScore, hasNotifyEvidence, weightedEngagement, isViral, isOfficialHost, isAuthorityHost, isDeniedHost, isPlatformHost, normalizeHost, summarizeSources } from '../quality.js';
+import { evidenceOf, capScore, combineScore, hasNotifyEvidence, weightedEngagement, isViral, isOfficialHost, isAuthorityHost, isDeniedHost, isPlatformHost, normalizeHost, summarizeSources } from '../quality.js';
 
-const SYSTEM = `你是 AI 领域热点分析师。给定监控范围（scope）与一批来自多个信息源的内容条目（含既有热点话题列表），完成聚类与评分。
+/** 聚类系统提示词（导出供模型评测/调试复用） */
+export const SYSTEM = `你是 AI 领域热点分析师。给定监控范围（scope）与一批来自多个信息源的内容条目（含既有热点话题列表），完成聚类与评分。
 
 1. 聚类：把讨论**同一事件/产品**的条目合并为一个话题（跨信息源合并：HN + 官方博客 + 媒体都在说同一个模型发布 → 一个话题）。
    与既有话题重复时**沿用既有 cluster_key**并把新条目并入 item_ids；同一产品的不同事件（如"发布"与"故障调查"）可合并为同一话题，但要在摘要里说清是几件事。
@@ -16,15 +17,12 @@ const SYSTEM = `你是 AI 领域热点分析师。给定监控范围（scope）�
    - item_ids：属于该话题的条目 id 数组（只能引用给定条目）；
    - scope_id：最相关的监控范围 id，无则 null。
 
-3. score（0~100）**必须与证据相称**，系统还会按证据硬性封顶，虚高会被拉回。判定顺序：先看量级，再看佐证强度。
-   条目证据字段（代码算好，直接采用）：src=信息源、tier=来源分级(1官方/2强策展/3媒体/4泛搜索UGC)、q=质量分、eng=加权互动数、viral=1 表示该条达到所属平台的爆款门槛、host=域名、official=1 厂商官方一手、auth=1 权威媒体名单内、m=原始互动数据。
-   - 量级（决定基础分）：
-     · 全新模型/重大能力/开源权重/行业级合作落地 → 85~100；
-     · 现有产品的常规版本迭代、小功能更新、客户案例软文、活动预告、综述/榜单类内容 → 60~75，即使 official=1 也不给 85 以上；
-     · 旧闻转述、纯观点评论 → ≤60。
-   - 佐证修正：≥2 个不同信息源或 official=1 且量级达标 → 可给到 90+；仅 1 条来源且非官方 → ≤65；eng=0 且单一来源 → ≤60；
-     多条 viral=1 跨平台讨论 → 可按热度给 70~85；viral=0 的普通社交帖（HN 几十赞、GitHub 几百星）只是零散讨论，不得高于 60。
+3. score（0~100）**只评价事件的量级**（不要考虑传播热度，热度由系统按互动数据另算并合成）。判定顺序：
+   - 全新模型/重大能力/开源权重/行业级合作落地 → 85~100；
+   - 现有产品的常规版本迭代、小功能更新、客户案例软文、活动预告、综述/榜单类内容 → 60~75，即使 official=1 也不给 85 以上；
+   - 旧闻转述、纯观点评论 → ≤60。
    - 注意：GitHub 老仓库（tensorflow/vscode 级别）常驻 trending 榜，"总星数高"不是热点，只有 stars_today（当日新增）才是信号。
+   - 字段互动数据（eng/viral/m）仅作参考，**不必**用它调分：系统会把话题互动总量按权重并入最终热度。
 4. 无信息量、纯广告、与所有 scope 无关的条目可以不归入任何话题。
 
 只输出 JSON：{"topics":[{"cluster_key":"...","title":"...","summary_zh":"...","why_hot":"...","score":85,"item_ids":[1,2],"scope_id":1}]}
@@ -78,7 +76,7 @@ export async function clusterTopics(newItemIds, onProgress) {
 
   const now = new Date().toISOString();
   const minScore = Number(getSetting('thresholds.minTopicScore', config.thresholds.minTopicScore));
-  const newHot = [];
+    const newHot = [];
   const updated = [];
   const failedIds = [];
   let topics = 0;
@@ -88,7 +86,9 @@ export async function clusterTopics(newItemIds, onProgress) {
    * 并对"单源且非官方"的话题硬性封顶，防止 1 条噪音拿到满分。
    */
   const upsert = (t, validIds) => {
-    const prev = db.prepare('SELECT * FROM topics WHERE cluster_key=?').get(t.cluster_key);
+      // v1.5 两列可能尚未迁移（老进程写入时）：无列则退回不含新列的 SQL，避免整批聚类失败
+      const WITH_SCORE_COLS = topicColumns.has_base_score && topicColumns.has_engagement_total;
+      const prev = db.prepare('SELECT * FROM topics WHERE cluster_key=?').get(t.cluster_key);
     const prevIds = prev ? JSON.parse(prev.item_ids || '[]') : [];
     const allIds = [...new Set([...prevIds, ...validIds])];
     // 证据基于该话题**全部**条目（含历史轮次入库的），而非仅本批。
@@ -100,18 +100,27 @@ export async function clusterTopics(newItemIds, onProgress) {
       // 卡片展示用：最权威 1~2 个来源 + 原始发布轴 + 最热条目的原始互动指标
       const src = summarizeSources(rows);
       const capped = capScore(Number(t.score) || 0, ev);
+      // 互动分量与 AI 基线并列合成热度分（高互动话题因此排到前面）
+      const scored = combineScore(Number(t.score) || 0, ev.engagement_total, ev);
       const merged = JSON.stringify(allIds);
 
       if (prev) {
         // 证据累积后重新封顶：历史虚高分会被拉回证据允许的上限
-        const recheck = capScore(Math.max(prev.score, capped.score), ev);
+        const recheck = combineScore(Math.max(prev.base_score ?? t.score ?? 0, Number(t.score) || 0), ev.engagement_total, ev);
         db.prepare(
-          `UPDATE topics SET title=?, summary_zh=?, why_hot=?, score=?, item_ids=?, last_updated=?, scope_id=COALESCE(?, scope_id),
-           source_count=?, host_count=?, has_official=?, viral_count=?, evidence_tier=?, sources=?,
-           primary_host=?, primary_label=?, primary_url=?, primary_source=?, primary_tier=?, authority_count=?, top_metrics=?,
-           published_first=?, published_last=? WHERE id=?`
+          WITH_SCORE_COLS
+            ? `UPDATE topics SET title=?, summary_zh=?, why_hot=?, score=?, base_score=?, engagement_total=?, item_ids=?, last_updated=?, scope_id=COALESCE(?, scope_id),
+                 source_count=?, host_count=?, has_official=?, viral_count=?, evidence_tier=?, sources=?,
+                 primary_host=?, primary_label=?, primary_url=?, primary_source=?, primary_tier=?, authority_count=?, top_metrics=?,
+                 published_first=?, published_last=? WHERE id=?`
+            : `UPDATE topics SET title=?, summary_zh=?, why_hot=?, score=?, item_ids=?, last_updated=?, scope_id=COALESCE(?, scope_id),
+                 source_count=?, host_count=?, has_official=?, viral_count=?, evidence_tier=?, sources=?,
+                 primary_host=?, primary_label=?, primary_url=?, primary_source=?, primary_tier=?, authority_count=?, top_metrics=?,
+                 published_first=?, published_last=? WHERE id=?`
         ).run(
-          t.title, t.summary_zh, t.why_hot, recheck.score, merged, now, t.scope_id ?? null,
+          ...(WITH_SCORE_COLS
+            ? [t.title, t.summary_zh, t.why_hot, recheck.score, recheck.base, ev.engagement_total, merged, now, t.scope_id ?? null]
+            : [t.title, t.summary_zh, t.why_hot, recheck.score, merged, now, t.scope_id ?? null]),
           ev.source_count, ev.host_count, ev.has_official, ev.viral_count, recheck.tier, JSON.stringify(ev.sources),
           src.primaryHost, src.primaryLabel, src.primaryUrl, src.primarySource, src.primaryTier, src.authorityCount,
           JSON.stringify(src.metrics || {}), src.publishedFirst, src.publishedLast, prev.id
@@ -130,25 +139,27 @@ export async function clusterTopics(newItemIds, onProgress) {
     } else {
       const r = db
         .prepare(
-                `INSERT INTO topics(scope_id,title,summary_zh,why_hot,score,item_ids,first_seen,last_updated,cluster_key,source_count,host_count,has_official,viral_count,evidence_tier,sources,
-                   primary_host,primary_label,primary_url,primary_source,primary_tier,authority_count,top_metrics,published_first,published_last)
-                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+                WITH_SCORE_COLS
+                  ? `INSERT INTO topics(scope_id,title,summary_zh,why_hot,score,base_score,engagement_total,item_ids,first_seen,last_updated,cluster_key,source_count,host_count,has_official,viral_count,evidence_tier,sources,
+                       primary_host,primary_label,primary_url,primary_source,primary_tier,authority_count,top_metrics,published_first,published_last)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+                  : `INSERT INTO topics(scope_id,title,summary_zh,why_hot,score,item_ids,first_seen,last_updated,cluster_key,source_count,host_count,has_official,viral_count,evidence_tier,sources,
+                       primary_host,primary_label,primary_url,primary_source,primary_tier,authority_count,top_metrics,published_first,published_last)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
               )
               .run(
-                t.scope_id ?? null,
-                t.title,
-                t.summary_zh,
-                t.why_hot,
-                capped.score,
+                ...(WITH_SCORE_COLS
+                  ? [t.scope_id ?? null, t.title, t.summary_zh, t.why_hot, scored.score, scored.base, ev.engagement_total]
+                  : [t.scope_id ?? null, t.title, t.summary_zh, t.why_hot, scored.score]),
                 merged,
-          now,
+                now,
                 now,
                 t.cluster_key,
                 ev.source_count,
                 ev.host_count,
                 ev.has_official,
                 ev.viral_count,
-                capped.tier,
+                scored.tier,
                 JSON.stringify(ev.sources),
                 src.primaryHost,
                 src.primaryLabel,
@@ -160,16 +171,16 @@ export async function clusterTopics(newItemIds, onProgress) {
                 src.publishedFirst,
                 src.publishedLast
               );
-      topics++;
-      if (capped.score >= minScore && hasNotifyEvidence(ev)) {
-        newHot.push({
-          topicId: Number(r.lastInsertRowid),
-          title: t.title,
-          score: capped.score,
-          summary_zh: t.summary_zh,
-          why_hot: t.why_hot,
-        });
-      }
+            topics++;
+            if (scored.score >= minScore && hasNotifyEvidence(ev)) {
+              newHot.push({
+                topicId: Number(r.lastInsertRowid),
+                title: t.title,
+                score: scored.score,
+                summary_zh: t.summary_zh,
+                why_hot: t.why_hot,
+              });
+            }
     }
   };
 

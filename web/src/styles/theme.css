@@ -670,6 +670,17 @@ nav.tabs button.on {
 /* 品牌名后面的真实域名：极小号、低对比度，需要核对时能一眼看到 */
 .src-legend u { text-decoration: none; margin-left: 5px; font-size: 10px; opacity: 0.5; }
 
+/* ---------- 热度分构成（互动作为并列主成分） ---------- */
+.score-parts {
+  display: inline-flex; align-items: baseline; gap: 6px; font-family: var(--hud); font-size: 11px;
+  padding: 2.5px 10px; border-radius: 20px; border: 1px solid rgba(62, 242, 165, 0.34);
+  background: linear-gradient(180deg, rgba(62, 242, 165, 0.1), rgba(62, 242, 165, 0.02));
+  color: #9fb4c9;
+}
+.score-parts b { color: #3ef2a5; font-size: 12.5px; }
+.score-parts i { font-style: normal; opacity: 0.7; }
+.score-parts s { text-decoration: none; opacity: 0.55; }
+
 /* ---------- 详情页原始互动指标 ---------- */
 .hit-metrics { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 7px; }
 .hit-metrics .metric {

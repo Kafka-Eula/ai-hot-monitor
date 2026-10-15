@@ -416,7 +416,10 @@ export const DEFAULT_GATES = {
   maxAgeDays: 14,
   dedupThreshold: 0.85,
   dedupEnabled: true,
-};
+    // 话题热度分里的互动权重与互动满刻度（用户要求：互动越多排名越靠前）
+    engagementWeight: 0.4,
+    engagementFull: 1000,
+  };
 
 /** 各源加权互动分的入库门槛 / 权威门槛 */
 const SOCIAL_GATE_KEY = {
@@ -462,8 +465,10 @@ export function gates() {
     maxAgeDays: num('maxAgeDays', DEFAULT_GATES.maxAgeDays),
     dedupThreshold: num('dedupThreshold', DEFAULT_GATES.dedupThreshold),
     dedupEnabled: bool('dedupEnabled', DEFAULT_GATES.dedupEnabled),
-  };
-}
+        engagementWeight: num('engagementWeight', DEFAULT_GATES.engagementWeight),
+        engagementFull: num('engagementFull', DEFAULT_GATES.engagementFull),
+      };
+    }
 
 /** 该源的加权互动分入库门槛 / 权威门槛 */
 export function sourceThresholds(source, g = gates()) {
@@ -649,6 +654,7 @@ export function evidenceOf(items, g = gates()) {
     const authorityHosts = new Set();
     let hasOfficial = 0;
     let viralCount = 0;
+    let engTotal = 0;
     let socialOnly = items.length > 0;
 
     for (const it of items) {
@@ -657,8 +663,12 @@ export function evidenceOf(items, g = gates()) {
       if (h) hosts.add(h);
       if (isOfficialAnnouncement(it.source, h, it.url)) hasOfficial = 1;
 
+      // 互动总量：话题内**全部**条目累加（官方/新闻类无互动接口，天然贡献 0），
+      // 供话题热度分合成使用——高互动话题（B站/社交）因此能排到前面
+      const eng = Number(it.engagement ?? weightedEngagement(it.source, it.metrics)) || 0;
+      engTotal += eng;
+
       if (SOCIAL_SOURCES.has(it.source)) {
-        const eng = it.engagement ?? weightedEngagement(it.source, it.metrics);
         if (isViral(it.source, eng, g)) viralCount++;
       } else {
         socialOnly = false;
@@ -672,6 +682,7 @@ export function evidenceOf(items, g = gates()) {
       has_official: hasOfficial,
       authority_media_count: authorityHosts.size,
       viral_count: viralCount,
+      engagement_total: Math.round(engTotal),
       social_only: socialOnly ? 1 : 0,
       sources: [...sources].sort(),
     };
@@ -708,6 +719,62 @@ export function capScore(rawScore, ev) {
   const tier = evidenceTier(ev);
   const cap = EVIDENCE_TIERS[tier].cap;
   return { score: Math.min(s, cap), capped: s > cap, tier, cap };
+}
+
+/** 话题互动量基准尺度：与 log 曲线配合，决定"多少互动算中等热度" */
+export const ENGAGEMENT_FULL = 1000;
+/** 互动分量在话题热度分中的权重（与 AI 基线分并列的主成分） */
+export const ENGAGEMENT_WEIGHT = 0.4;
+/**
+ * 互动分量的曲线系数：每 10 倍互动 ≈ +40 分（封顶 100）。
+ * 即 互动分量 = min(100, 40 × log₁₀(1 + 总量/基准))。
+ */
+const ENGAGEMENT_K = 40;
+
+/**
+ * 话题互动分量（0~100）：对全话题加权互动总量做**对数**归一。
+ *
+ * 为何用对数而非线性/指数：互动是长尾分布——B站头部几万到几十万互动，
+ * 普通话题几百互动。线性归一会让头部顶死、其余全挤在 0 附近；
+ * 指数曲线又衰减太快（实测 10 万互动即满分，30 万与 100 万无区分度）。
+ * 对数曲线在整个现实区间都有区分度（基准 1000）：
+ *   500 → 7 分·2千 → 19 分·1万 → 42 分·2万 → 53 分·10万 → 80 分·30万 → 100 分
+ */
+export function engagementScore(engagementTotal, g = gates()) {
+  const total = Math.max(0, Number(engagementTotal) || 0);
+  if (!total) return 0;
+  const full = Math.max(1, Number(g.engagementFull) || ENGAGEMENT_FULL);
+  const score = ENGAGEMENT_K * Math.log10(1 + total / full);
+  return Math.round(Math.min(100, Math.max(0, score)) * 10) / 10;
+}
+
+/**
+ * 合成话题热度分：互动分量与 AI 基线分**并列**，最后按证据等级封顶。
+ *
+ * score = (1−w) × AI基线 + w × 互动分量
+ *   · 高互动话题（B站/社交爆款）直接压过 0 互动的官方发布（用户明确要求）；
+ *   · w 由 gates.engagementWeight 控制（默认 0.4），设 0 即退回"纯 AI 评分"；
+ *   · 封顶仍以证据等级为准（official/media_cross 100、viral_social 80…），
+ *     保证"单源孤证"不会因为互动高就绕过封顶。
+ *
+ * @param {number} baseScore AI 给的基线分
+ * @param {number} engagementTotal 话题加权互动总量（evidenceOf().engagement_total）
+ * @param {object} ev evidenceOf 结果（决定封顶）
+ * @param {object} g gates
+ */
+export function combineScore(baseScore, engagementTotal, ev, g = gates()) {
+  const base = Math.max(0, Math.min(100, Number(baseScore) || 0));
+  const w = Math.max(0, Math.min(1, Number(g.engagementWeight ?? ENGAGEMENT_WEIGHT)));
+  const eng = w > 0 ? engagementScore(engagementTotal, g) : 0;
+  const blended = (1 - w) * base + w * eng;
+  const capped = capScore(blended, ev);
+  return {
+    ...capped,
+    base: Math.round(base * 10) / 10,
+    engagement: eng,
+    weight: w,
+    blended: Math.round(blended * 10) / 10,
+  };
 }
 
 /**
@@ -1018,6 +1085,8 @@ export default {
   dedupByTitle,
   evidenceOf,
   capScore,
+  combineScore,
+  engagementScore,
   hasNotifyEvidence,
   weightedEngagement,
   isViral,

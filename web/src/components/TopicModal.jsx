@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, fmtAgo, fmtShort, fmtDay, freshness, metricsList, SOURCE_LABEL, EVIDENCE_TIER_LABEL, NO_DATE_NOTE } from '../lib/api.js';
+import { api, fmtAgo, fmtShort, fmtDay, fmtNum, freshness, metricsList, SOURCE_LABEL, EVIDENCE_TIER_LABEL, NO_DATE_NOTE } from '../lib/api.js';
 
 const SRC_COLOR = {
   hn: '#fb923c',
@@ -65,45 +65,56 @@ export default function TopicModal({ id, onClose }) {
           <>
             <div className="topic-top" style={{ marginBottom: 8 }}>
               <div className={`score ${t.score >= 80 ? '' : ''}`} style={t.score >= 80 ? { background: 'rgba(255,180,84,.09)', borderColor: '#8a5e26', color: '#ffb454' } : {}}>
-                <b>{Math.round(t.score)}</b>
-                <s>HEAT</s>
-              </div>
-              <div>
-                <h2>{t.title}</h2>
-                <div className="hit-meta" style={{ marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                                  {t.primary_label && (
-                                    <span
-                                      className={`chip src ${t.primary_tier >= 4 ? 'src-official' : t.primary_tier === 3 ? 'src-media' : ''}`}
-                                      title={t.primary_host || ''}
-                                    >
-                                      {t.primary_label}
-                                    </span>
-                                  )}
-                                  {(t.authority_count || 0) > 1 && (
-                                    <span className="chip" title="该话题涉及的官方/权威媒体域名总数">
-                                      +{(t.authority_count || 0) - 1} 权威来源
-                                    </span>
-                                  )}
-                                  {(t.source_count || 1) >= 2 && <span>⛓ 跨 {t.source_count} 源</span>}
-                                  {!!t.has_official && <span style={{ color: '#34d399' }}>✓ 含官方一手</span>}
-                                  {!!t.viral_count && <span style={{ color: '#e879f9' }}>🔥 {t.viral_count} 条社交爆款</span>}
-                                  {t.evidence_tier && <span style={{ opacity: 0.75 }}>证据档: {EVIDENCE_TIER_LABEL[t.evidence_tier] || t.evidence_tier}</span>}
-                                  <span>首次 {fmtAgo(t.first_seen)}</span>
-                                  <span>更新 {fmtAgo(t.last_updated)}</span>
-                                </div>
-                                {/* 时间轴：区分"事件发生时间"与"收录/聚类时间"——这正是原先要跳站核对的信息 */}
-                                <div className="hit-meta" style={{ marginTop: 3 }}>
-                                  {t.published_first ? (
-                                    <span title="话题内最早一条内容的原始发布时间 → 最新一条的发布时间">
-                                      事件时间 {fmtDay(t.published_first)}
-                                      {t.published_last && t.published_last !== t.published_first ? ` → ${fmtDay(t.published_last)}` : ''}
-                                    </span>
-                                  ) : (
-                                    <span style={{ opacity: 0.7 }}>{NO_DATE_NOTE}（均为榜单快照类来源）</span>
-                                  )}
-                                  {fresh && <i className={`tfresh ${fresh.key}`}>{fresh.label}</i>}
-                                  <span style={{ opacity: 0.7 }}>· 收录 {fmtAgo(t.last_updated)}</span>
-                                </div>
+                            <b>{Math.round(t.score)}</b>
+                            <s>HEAT</s>
+                          </div>
+                          <div>
+                            <h2>{t.title}</h2>
+                            <div className="hit-meta" style={{ marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                              {/* 热度分构成：互动占比越高，说明它靠"讨论热度"上榜 */}
+                              {!!t.engagement_total && (
+                                <span
+                                  className="score-parts"
+                                  title={`热度 ${Math.round(t.score)} = AI 事件量级 ${Math.round(t.base_score || 0)}×(1−w) + 互动热度 ${Math.round(t.engagement_score || 0)}×w`}
+                                >
+                                  互动热度 <b>{Math.round(t.engagement_score || 0)}</b>
+                                  <i>权重 {Math.round((t.engagement_weight ?? 0.4) * 100)}%</i>
+                                  <s>总量 {fmtNum(t.engagement_total)}</s>
+                                </span>
+                              )}
+                              {t.primary_label && (
+                                <span
+                                  className={`chip src ${t.primary_tier >= 4 ? 'src-official' : t.primary_tier === 3 ? 'src-media' : ''}`}
+                                  title={t.primary_host || ''}
+                                >
+                                  {t.primary_label}
+                                </span>
+                              )}
+                              {(t.authority_count || 0) > 1 && (
+                                <span className="chip" title="该话题涉及的官方/权威媒体域名总数">
+                                  +{(t.authority_count || 0) - 1} 权威来源
+                                </span>
+                              )}
+                              {(t.source_count || 1) >= 2 && <span>⛓ 跨 {t.source_count} 源</span>}
+                              {!!t.has_official && <span style={{ color: '#34d399' }}>✓ 含官方一手</span>}
+                              {!!t.viral_count && <span style={{ color: '#e879f9' }}>🔥 {t.viral_count} 条社交爆款</span>}
+                              {t.evidence_tier && <span style={{ opacity: 0.75 }}>证据档: {EVIDENCE_TIER_LABEL[t.evidence_tier] || t.evidence_tier}</span>}
+                              <span>首次 {fmtAgo(t.first_seen)}</span>
+                              <span>更新 {fmtAgo(t.last_updated)}</span>
+                            </div>
+                            {/* 时间轴：区分"事件发生时间"与"收录/聚类时间"——这正是原先要跳站核对的信息 */}
+                            <div className="hit-meta" style={{ marginTop: 3 }}>
+                              {t.published_first ? (
+                                <span title="话题内最早一条内容的原始发布时间 → 最新一条的发布时间">
+                                  事件时间 {fmtDay(t.published_first)}
+                                  {t.published_last && t.published_last !== t.published_first ? ` → ${fmtDay(t.published_last)}` : ''}
+                                </span>
+                              ) : (
+                                <span style={{ opacity: 0.7 }}>{NO_DATE_NOTE}（均为榜单快照类来源）</span>
+                              )}
+                              {fresh && <i className={`tfresh ${fresh.key}`}>{fresh.label}</i>}
+                              <span style={{ opacity: 0.7 }}>· 收录 {fmtAgo(t.last_updated)}</span>
+                            </div>
               </div>
             </div>
             <p style={{ color: '#a9bacc', fontSize: 14 }}>{t.summary_zh}</p>

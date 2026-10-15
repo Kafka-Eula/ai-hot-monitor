@@ -6,7 +6,7 @@ import { aiStatus, listModels } from '../ai/openrouter.js';
 import { publicKey, saveSub, dropSub, pushAll, pushConfigured, subCount } from '../notify/webpush.js';
 import { notify } from '../notify/index.js';
 import { emailReady } from '../notify/mailer.js';
-import { labelAuthor, brandOfHost, isPlatformHost } from '../quality.js';
+import { labelAuthor, brandOfHost, isPlatformHost, gates, engagementScore } from '../quality.js';
 
 export const api = Router();
 
@@ -116,7 +116,7 @@ api.delete('/scopes/:id', (req, res) => {
  *   since      时间窗：24h / 3d / 7d / 30d
  *   min_score  最低热度分
  *   q          关键词（标题/摘要/为什么火）
- *   sort       score(默认) | updated | sources | items
+ *   sort       score(默认) | updated | sources | items | engagement
  *   limit/offset 分页
  */
 const TIER_STRONG = new Set(['official', 'media_cross', 'viral_social']);
@@ -191,13 +191,16 @@ function applyDims(list, q, except) {
 
 api.get('/topics', (req, res) => {
   const q = req.query;
-  const all = db.prepare('SELECT * FROM topics').all().map(parseTopic);
+  const gatesNow = gates();
+  const all = db.prepare('SELECT * FROM topics').all().map((t) => parseTopic(t, gatesNow));
 
   const sorters = {
-    score: (a, b) => b.score - a.score || Date.parse(b.last_updated) - Date.parse(a.last_updated),
-      updated: (a, b) => axisTime(b) - axisTime(a) || b.score - a.score,
+    score: (a, b) => b.score - a.score || (b.engagement_total || 0) - (a.engagement_total || 0),
+    updated: (a, b) => axisTime(b) - axisTime(a) || b.score - a.score,
     sources: (a, b) => (b.source_count || 1) - (a.source_count || 1) || b.score - a.score,
     items: (a, b) => (b.item_ids?.length || 0) - (a.item_ids?.length || 0) || b.score - a.score,
+    // 按互动量排序：直接看"哪里有讨论"（B站/社交互动多的排最前）
+    engagement: (a, b) => (b.engagement_total || 0) - (a.engagement_total || 0) || b.score - a.score,
   };
 
   const filtered = [...applyDims(all, q, null)].sort(sorters[q.sort] || sorters.score);
@@ -241,7 +244,7 @@ function countBy(list, key) {
   return out;
 }
 
-function parseTopic(t) {
+export function parseTopic(t, g) {
   let sources = [];
   try {
     sources = JSON.parse(t.sources || '[]');
@@ -254,7 +257,20 @@ function parseTopic(t) {
   } catch {
     /* 同上 */
   }
-  return { ...t, item_ids: JSON.parse(t.item_ids || '[]'), sources, top_metrics: topMetrics };
+  const gatesNow = g || gates();
+  const base = Number(t.base_score) > 0 ? Number(t.base_score) : Number(t.score) || 0;
+  const total = Number(t.engagement_total) || 0;
+  return {
+    ...t,
+    item_ids: JSON.parse(t.item_ids || '[]'),
+    sources,
+    top_metrics: topMetrics,
+    base_score: base,
+    engagement_total: total,
+    // 展示用的分项（前端 hover 说明"为什么它排这么前"）
+    engagement_score: engagementScore(total, gatesNow),
+    engagement_weight: gatesNow.engagementWeight,
+  };
 }
 
 /** 可信等级中文名（详情页逐条标注来源身份） */
@@ -375,12 +391,12 @@ api.get('/topics/:id', (req, res) => {
         .prepare(`SELECT * FROM items WHERE id IN (${ids.map(() => '?').join(',')})`)
         .all(...ids)
     : [];
-    res.json({
-      ...topic,
-      // 原始条目按发布/采集时间新→旧，最上面的就是"最新动态"
-      items: items.map(enrichItem).sort((a, b) => (Date.parse(b.published_at || b.collected_at) || 0) - (Date.parse(a.published_at || a.collected_at) || 0)),
+  res.json({
+    ...topic,
+    // 原始条目按发布/采集时间新→旧，最上面的就是"最新动态"
+    items: items.map(enrichItem).sort((a, b) => (Date.parse(b.published_at || b.collected_at) || 0) - (Date.parse(a.published_at || a.collected_at) || 0)),
+      });
     });
-  });
 
 // ---------- notices ----------
 api.get('/notices', (req, res) => {

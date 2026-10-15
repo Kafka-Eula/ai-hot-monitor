@@ -13,13 +13,15 @@
   * 3.5) 给 GitHub Trending 条目补真实"建库时间"（repos API，仅补缺失的旧数据）
  * 4) v1.4：重算 topics 的最权威来源(primary_*)、权威来源数、最热条目原始指标、
   *    原始发布轴（来源精简与互动/时间露出，见 quality.summarizeSources）
+  * 4.5) v1.5：按 base_score + engagement_total 重新合成话题热度分
+  *    （互动越多 → 排名越靠前，见 quality.combineScore）
  * 5) 打印前后对比
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../src/config.js';
 import db from '../src/db.js';
-import { applyQualityGate, gates, evidenceOf, capScore, summarizeSources } from '../src/quality.js';
+import { applyQualityGate, gates, evidenceOf, capScore, combineScore, summarizeSources } from '../src/quality.js';
 import { fetchRepoMeta } from '../src/collectors/githubTrending.js';
 import { sleep } from '../src/util/http.js';
 
@@ -132,7 +134,7 @@ const topics = db.prepare('SELECT * FROM topics').all();
 const tStats = { updated: 0, deleted: 0, demoted: 0, orphaned: 0, enriched: 0 };
 const delTopic = db.prepare('DELETE FROM topics WHERE id=?');
 const updTopic = db.prepare(
-  `UPDATE topics SET score=?, item_ids=?, source_count=?, host_count=?, has_official=?, viral_count=?, evidence_tier=?, sources=?,
+  `UPDATE topics SET score=?, base_score=?, engagement_total=?, item_ids=?, source_count=?, host_count=?, has_official=?, viral_count=?, evidence_tier=?, sources=?,
        primary_host=?, primary_label=?, primary_url=?, primary_source=?, primary_tier=?, authority_count=?, top_metrics=?, published_first=?, published_last=?
    WHERE id=?`
 );
@@ -152,8 +154,11 @@ db.transaction(() => {
       .prepare(`SELECT source,url,host,metrics,published_at,author,title FROM items WHERE id IN (${alive.map(() => '?').join(',')})`)
       .all(...alive);
     const ev = evidenceOf(rows);
-    const capped = capScore(t.score, ev);
-    const src = summarizeSources(rows);
+        // v1.5：score 由「AI 基线 + 互动分量」合成（用户要求互动越多排名越靠前）。
+        // 基线取库里的 base_score；老数据没有该列时退回用旧 score 当基线，避免把历史分归零。
+        const base = Number(t.base_score) > 0 ? Number(t.base_score) : Number(t.score) || 0;
+        const capped = combineScore(base, ev.engagement_total, ev);
+        const src = summarizeSources(rows);
     if (capped.capped) tStats.demoted++;
     // 仅剩 1 条且非官方、封顶后仍低于 40 → 视为噪音话题删除
     if (alive.length === 1 && !ev.has_official && capped.score < 40) {
@@ -164,15 +169,17 @@ db.transaction(() => {
     tStats.updated++;
     if (!DRY) {
       updTopic.run(
-        capped.score, JSON.stringify(alive), ev.source_count, ev.host_count, ev.has_official, ev.viral_count, capped.tier,
+              capped.score, capped.base, ev.engagement_total, JSON.stringify(alive), ev.source_count, ev.host_count, ev.has_official, ev.viral_count, capped.tier,
               JSON.stringify(ev.sources), src.primaryHost, src.primaryLabel, src.primaryUrl, src.primarySource, src.primaryTier,
               src.authorityCount, JSON.stringify(src.metrics || {}), src.publishedFirst, src.publishedLast, t.id
       );
     }
     if (!t.primary_label && src.primaryLabel) tStats.enriched++;
     if (capped.capped) {
-      console.log(`  [demote] ${t.cluster_key}: ${t.score} → ${capped.score} (${capped.tier}: 源${ev.source_count}/域${ev.host_count}/官方${ev.has_official}/爆款${ev.viral_count})`);
-    }
+          console.log(`  [cap] ${t.cluster_key}: ${t.score} → ${capped.score}（互动${ev.engagement_total} 基线${capped.base} 互动分量${capped.engagement}）`);
+        } else {
+          console.log(`  [score] ${t.cluster_key}: ${t.score} → ${capped.score}（互动${ev.engagement_total} → 分量${capped.engagement}/100，基线${capped.base}）`);
+        }
   }
 })();
 
@@ -191,7 +198,7 @@ console.log(`[backfill] ${DRY ? '试运行（未写库）' : '已完成'}，处�
 if (!DRY) {
   console.table(
     db
-        .prepare('SELECT id, score, source_count, authority_count, primary_label, published_first, substr(title,1,26) title FROM topics ORDER BY score DESC LIMIT 12')
+        .prepare('SELECT id, score, base_score, engagement_total, evidence_tier, primary_label, substr(title,1,24) title FROM topics ORDER BY score DESC LIMIT 12')
       .all()
   );
   console.log('[backfill] 建议：重启服务并点「立即扫描」，让新规则接管后续抓取。');

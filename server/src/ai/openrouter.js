@@ -122,11 +122,14 @@ async function callOnce(body) {
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(90000),
   }).catch((e) => {
-    if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
-      throw new AiError('model_slow', `请求超时(60s): ${body.model}`);
-    }
-    throw e;
-  });
+      // 超时可能发生在建连、等首字节**或读取响应体**（推理模型边思考边输出，最容易在此超时，
+      // Node 报 code=23 "operation was aborted due to timeout"）。统一归一化为 model_slow，
+      // 让上层"冷却该模型并换下一个"，而不是误判成"格式不支持"在同一模型上空转。
+      if (e?.name === 'TimeoutError' || e?.name === 'AbortError' || e?.code === 23) {
+        throw new AiError('model_slow', `请求超时: ${body.model}`);
+      }
+      throw e;
+    });
   if (!res.ok) {
     const txt = (await res.text().catch(() => '')).slice(0, 300);
     if (res.status === 402) throw new AiError('no_credit', `余额不足: ${txt}`);
@@ -137,11 +140,21 @@ async function callOnce(body) {
     }
     throw new AiError('http_' + res.status, `HTTP ${res.status}: ${txt}`);
   }
-  return res.json();
-}
+      try {
+        return await res.json();
+      } catch (e) {
+        // 同因：响应体读取阶段超时
+        if (e?.name === 'TimeoutError' || e?.name === 'AbortError' || e?.code === 23) {
+          throw new AiError('model_slow', `响应体读取超时: ${body.model}`);
+        }
+        throw e;
+      }
+    }
 
 function extractJson(text) {
   if (!text) throw new AiError('empty', 'AI 返回为空');
+  // 有些模型（实测 cohere/north-mini-code）会在 JSON 后面跟解释文字，
+  // 故先截取最外层 {} 再解析，最后才判定"格式不支持"。
   const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text);
   const raw = (fenced ? fenced[1] : text).trim();
   try {
@@ -178,11 +191,17 @@ export async function chatJSON({ system, user, schema, name = 'output', model })
     const base = {
       model: m,
       temperature: 0.1,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
-    };
+          // 关键：关闭"思考模式"。实测免费的 nemotron/dots/cohere 都是推理模型，
+          // 保留思考会把 token 预算烧在推理上、正文一直不输出（表现：completion_tokens=4000
+          // 但 content 为空，或直接超时）——这正是聚类长期出 0 话题的原因。
+          // 明确 JSON 输出任务无需长链推理，关闭后同一批数据 7~35s 内稳定返回合法 JSON。
+          // 不支持的模型会忽略该字段，无副作用。
+          reasoning: { enabled: false },
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user },
+          ],
+        };
     const attempts = [
       { ...base, response_format: { type: 'json_schema', json_schema: { name, strict: true, schema } } },
       { ...base, response_format: { type: 'json_object' } },
@@ -203,10 +222,16 @@ export async function chatJSON({ system, user, schema, name = 'output', model })
           coolModel(m, e.code);
           break; // 模型本身不可用：冷却并切换，不做格式降级
         }
-        if (i < attempts.length - 1) {
-          console.warn(`[ai] ${m} 格式不支持(${e.code || e.message})，降级重试`);
-        }
-      }
+              // 空返回 / 输出非 JSON：优先换模型（实测推理模型长思考会占满预算导致正文为空，
+              // 降级 response_format 救不回来；先换模型更有效，最后一个模型时才降级重试）
+              if ((e.code === 'empty' || e.code === 'bad_json') && m !== models[models.length - 1] && i === 0) {
+                console.warn(`[ai] ${m} 输出${e.code}（疑似思考占满预算），切换备用模型`);
+                break;
+              }
+              if (i < attempts.length - 1) {
+                console.warn(`[ai] ${m} 格式不支持(${e.code || e.message})，降级重试`);
+              }
+            }
     }
   }
   throw lastErr || new AiError('no_model', '无可用模型');
