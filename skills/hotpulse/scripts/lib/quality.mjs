@@ -408,7 +408,14 @@ export function passesGate(item, g = gates(), nowMs = Date.now()) {
     // 泛搜索噪音最大：域名必须在官方/权威名单内（宁缺毋滥）
     if (isDeniedHost(host)) return { pass: false, reason: `${item.source}_content_farm(${host})` };
     if (!isOfficialHost(host) && !isAuthorityHost(host)) {
-      return { pass: false, reason: `${item.source}_untrusted_host(${host})` };
+      // 聚合器例外：热点榜/转引类条目自身域名不在名单，但正文引用了权威媒体报道 → 放行
+      // （修复 WorkBuddy 实测漏报：k.sina.com.cn 热点榜转引凤凰/澎湃被拦，真事件凑不出 media_cross）
+      const mentioned = item.source === 'news_search' || item.source === 'cn_search' || item.source === 'cn_media'
+        ? mentionedAuthorityHosts(`${item.title} ${item.summary}`, host)
+        : null;
+      if (!mentioned || mentioned.size === 0) {
+        return { pass: false, reason: `${item.source}_untrusted_host(${host})` };
+      }
     }
     if (item.source === 'cn_search') {
       if (!item.published_at) return { pass: false, reason: 'cn_search_no_date' };
@@ -543,6 +550,11 @@ export function evidenceOf(items, g = gates()) {
     } else {
       socialOnly = false;
       if (h && (isAuthorityHost(h) || isOfficialHost(h))) authorityHosts.add(h);
+      // 聚合条目（热点榜/新闻摘要转引多家）：正文提及的权威媒体也计入交叉佐证
+      for (const mh of mentionedAuthorityHosts(`${it.title} ${it.summary}`, h)) {
+        authorityHosts.add(mh);
+        hosts.add(mh);
+      }
     }
   }
 
@@ -743,6 +755,49 @@ export function itemMatchesSubject(item, tokens) {
   if (!tokens.length) return true;
   const text = String(`${item.title || ''} ${item.summary || ''}`).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
   return tokens.some((tk) => text.includes(tk));
+}
+
+/**
+ * 聚合条目（新浪热点榜/Google News 一条正文塞多家报道）的"被引用媒体"提取。
+ *
+ * 背景（WorkBuddy 实测发现）：一条 news_search 聚合 item 正文里同时引了
+ * 澎湃/凤凰/开源中国的报道，但 host 只算它自己一家 → authority_media_count=1，
+ * 真·多家交叉的事件被误判"单源孤证"封顶 65，永远够不到通知线（漏报）。
+ *
+ * 口径（宁缺毋滥）：
+ * - 只匹配**含中文的品牌名**（"凤凰网""澎湃新闻"）——英文词（Axios/Nature/Synced）
+ *   在技术文本里误伤率高；英文交叉本来就会以多条独立 item 进来，不靠这个补。
+ * - 正文直链的真实媒体域名也计入（Bing/摘要里常见）。
+ * - 同品牌不同域名（sina.com.cn vs k.sina.com.cn）不算第二家。
+ * - 农场/平台域名不在 AUTHORITY/OFFICIAL 名单，天然被过滤。
+ */
+const AUTHORITY_BRANDS = (() => {
+  const map = new Map(); // 中文品牌名 → 域名（首个命中域名）
+  for (const [host, name] of Object.entries(BRAND_HOSTS)) {
+    if (isPlatformHost(host)) continue;
+    if (!hostMatch(host, AUTHORITY_HOSTS) && !hostMatch(host, OFFICIAL_HOSTS)) continue;
+    if (!/[^\u0000-\u007F]/.test(name)) continue; // 仅含中文的品牌名
+    if (!map.has(name)) map.set(name, host);
+  }
+  return map;
+})();
+
+/** @returns {Set<string>} 正文提及/链接到的**其他**权威域名 */
+export function mentionedAuthorityHosts(text, selfHost = '') {
+  const hits = new Set();
+  const s = String(text || '');
+  if (!s || !selfHost) return hits;
+  const selfBrand = brandOfHost(selfHost);
+  for (const m of s.matchAll(/https?:\/\/([a-z0-9][a-z0-9.-]*\.[a-z]{2,})/gi)) {
+    const h = m[1].toLowerCase().replace(/^www\./, '');
+    if (h !== selfHost && !isPlatformHost(h) && (isAuthorityHost(h) || isOfficialHost(h))) hits.add(h);
+  }
+  for (const [name, host] of AUTHORITY_BRANDS) {
+    if (host === selfHost || brandOfHost(host) === selfBrand) continue;
+    if (s.includes(name)) hits.add(host);
+  }
+  hits.delete(selfHost);
+  return hits;
 }
 
 /** 该条目的原始指标是否有意义（新闻/官宣源恒为 0） */

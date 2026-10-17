@@ -17,7 +17,9 @@ description: 监控 AI 领域热点——零依赖自包含，无需启动服务
 
 ## 前置
 
-- **Node ≥ 22.5**（用到内置 `node:sqlite` 与内置 `undici`）。**无需 `npm install`**。
+- **Node ≥ 24（推荐）**，用到内置 `node:sqlite` 与内置 `undici`，**无需 `npm install`**。
+  Node 22.5~23.x 也能跑，但 `node:sqlite` 在那批版本还是实验模块，需加 flag：
+  `node --experimental-sqlite scripts/hp.mjs doctor`。Node 24 起免 flag。
 - **境外源需要代理**：Node 原生 fetch 不读 `HTTPS_PROXY`，CLI 用内置 undici 走代理。国内直连时 HuggingFace/GitHub/Google News/OpenAI 博客等会超时并被静默跳过（国内源仍可用）。Clash/Verge 用户：
   ```powershell
   $env:HTTPS_PROXY="http://127.0.0.1:7897"; $env:HTTP_PROXY="http://127.0.0.1:7897"; $env:NO_PROXY="localhost,127.0.0.1"

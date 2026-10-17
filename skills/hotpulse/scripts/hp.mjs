@@ -21,6 +21,10 @@ if (maj < MIN_NODE || (maj === MIN_NODE && min < 5)) {
   console.error('升级后重试：https://nodejs.org/');
   process.exit(1);
 }
+if (maj === 22 || maj === 23) {
+  // 22.5~23.x 的 node:sqlite 仍是实验模块，缺 flag 会在 import 时报晦涩错误，提前给出可执行的提示
+  console.error(`提示：Node ${process.versions.node} 的 node:sqlite 需要 flag，请用：node --experimental-sqlite hp.mjs …（推荐升级到 Node 24+ 免 flag）`);
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
