@@ -1,24 +1,26 @@
-# HotPulse · AI 热点雷达
+# 📡 HotPulse · AI 热点雷达
 
-HotPulse 是一个本地优先的 AI 行业热点监控工具。它会从多个公开信息源收集新内容，经过规则质量筛选与去重，再按需使用 AI 甄别关键词命中、聚类热点并生成中文摘要。你可以在 Web 界面查看热点、管理监控项，并接收站内通知；邮件和浏览器推送为可选功能。
+**聚合 AI 行业动态，筛出值得关注的热点。**
 
-## 功能一览
+HotPulse 是一个本地优先的热点监控工具：从多个公开来源收集内容，通过规则过滤与去重，再按需使用 AI 甄别关键词命中、聚类热点并生成中文摘要。你可以在 Web 界面管理监控项、浏览热点和接收实时通知。
 
-- **关键词盯梢**：跟踪 GPT、Claude、DeepSeek 等关键词，查看 AI 甄别结果及原因。
-- **热点雷达**：管理关注范围，浏览聚类后的热点、中文摘要、来源与佐证信息。
-- **多源采集**：支持 Hacker News、GitHub Trending / 新建仓库、Hugging Face Papers、官方博客 RSS、Google/Bing 新闻 RSS、中文媒体与新闻搜索、Lobsters、Bilibili；X/Twitter 需要单独配置 API key。
-- **质量筛选**：按来源、时效、互动数据、域名与近似内容去重等规则过滤低价值内容；热点分数会受佐证强度约束。
-- **通知**：页面内实时通知默认可用；浏览器推送和邮件需要额外配置。
-- **独立 Agent Skill**：`skills/hotpulse/` 中还包含一个可单独使用的 CLI Skill，不依赖 Web 服务或 OpenRouter；它与 Web 版使用各自独立的 SQLite 数据库。
+## ✨ 功能
 
-## 技术栈
+- 🔎 **关键词盯梢**：跟踪 GPT、Claude、DeepSeek 等关键词，查看甄别结果与原因。
+- 📊 **热点雷达**：按关注范围浏览聚类话题、中文摘要、来源与佐证信息。
+- 🌐 **多源采集**：Hacker News、GitHub、Hugging Face、官方博客、新闻、中文媒体、Lobsters、Bilibili 等；X/Twitter 可选接入。
+- 🧹 **质量筛选**：根据来源、时效、互动数据与内容相似度过滤低价值信息，并按佐证强度约束热点分数。
+- 🔔 **通知**：站内实时通知开箱可用；邮件与浏览器推送可选配置。
+- 🤖 **独立 Agent Skill**：附带无需启动 Web 服务的 CLI Skill，与 Web 版数据隔离。
+
+## 🧰 技术栈
 
 - **服务端**：Node.js、原生 JavaScript ES Modules、Express、内置 `node:sqlite`、node-cron
 - **前端**：React、Vite、JavaScript
 - **数据存储**：本地 SQLite
 - **AI 接口**：OpenRouter（可选；AI 甄别与聚类需要配置）
 
-## 项目结构
+## 🗂️ 项目结构
 
 ```text
 .
@@ -45,24 +47,24 @@ HotPulse 是一个本地优先的 AI 行业热点监控工具。它会从多个�
 └── package.json            # npm workspaces 与常用命令
 ```
 
-## 快速开始
+## 🚀 快速开始
 
 ### 环境要求
 
 - Node.js **24 或更高版本**
 - npm
-- OpenRouter API Key（可选；没有 Key 时仍可采集和保存内容，但不会执行 AI 甄别与热点聚类）
+- OpenRouter API Key（可选；未配置时仍可采集内容，但跳过 AI 甄别与聚类）
 
 ### 本地开发
 
-在项目根目录执行：
+在项目根目录安装依赖并创建本地配置：
 
 ```powershell
 npm install
 Copy-Item .env.example .env
 ```
 
-编辑 `.env`，至少在需要 AI 功能时设置：
+如需启用 AI 功能，在 `.env` 中填入 OpenRouter API Key：
 
 ```dotenv
 OPENROUTER_API_KEY=你的_OpenRouter_API_Key
@@ -74,15 +76,17 @@ OPENROUTER_API_KEY=你的_OpenRouter_API_Key
 npm run dev
 ```
 
-- Web 界面：<http://localhost:5173>
-- 后端 API：<http://localhost:4117/api>
-- 健康检查：<http://localhost:4117/api/health>
+| 服务 | 地址 |
+| --- | --- |
+| Web 界面 | <http://localhost:5173> |
+| 后端 API | <http://localhost:4117/api> |
+| 健康检查 | <http://localhost:4117/api/health> |
 
-开发模式下，Vite 会将 `/api` 请求代理到本地后端。服务端默认每 30 分钟扫描一次；也可以在 Radar 页面手动启动扫描。
+开发模式下，Vite 会将 `/api` 请求代理到后端。服务端默认每 30 分钟扫描一次，也可以在 Radar 页面手动启动扫描。
 
 ### 生产运行
 
-先构建前端，再启动服务端：
+构建前端并启动服务端：
 
 ```powershell
 npm install
@@ -91,21 +95,21 @@ npm --workspace web run build
 npm start
 ```
 
-打开 <http://localhost:4117>。SQLite 数据库默认保存在 `data/hotpulse.db`，可用 `DB_FILE` 修改路径。数据库和 `.env` 都是本地数据，不应提交到仓库。
+然后打开 <http://localhost:4117>。SQLite 数据库默认保存在 `data/hotpulse.db`，可通过 `DB_FILE` 修改路径。
 
-## 使用流程
+## 🧭 使用流程
 
-1. 在 **Settings** 中配置 OpenRouter Key 和模型；需要时再设置扫描频率及通知渠道。
-2. 在 **Watch** 中添加要盯梢的关键词。
-3. 在 **Radar** 中添加关注范围，例如“AI 编程”或“开源大模型”。
+1. 在 **Settings** 配置 OpenRouter（可选）、扫描频率和通知渠道。
+2. 在 **Watch** 添加要跟踪的关键词。
+3. 在 **Radar** 添加关注范围，例如“AI 编程”或“开源大模型”。
 4. 点击“立即扫描”，或等待定时任务运行。
-5. 在 **Watch** 查看命中与甄别原因，在 **Radar** 搜索、筛选和查看热点及其来源。
+5. 在 **Watch** 查看命中与甄别原因，在 **Radar** 搜索和筛选热点。
 
-质量门槛与通知阈值可在设置页调整。没有配置 OpenRouter 时，采集和质量筛选仍会工作，但 AI 相关结果会暂时缺失。
+质量门槛和通知阈值可在设置页调整。未配置 OpenRouter 时，采集和质量筛选仍可工作，但不会生成 AI 甄别与聚类结果。
 
-## 配置说明
+## ⚙️ 配置
 
-完整模板见 [.env.example](.env.example)。常用配置：
+完整配置项见 [.env.example](.env.example)：
 
 | 变量 | 用途 | 默认值/说明 |
 | --- | --- | --- |
@@ -119,11 +123,11 @@ npm start
 | `SMTP_*` / `MAIL_*` | 邮件通知 | 可选 |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | 浏览器 Web Push | 可选 |
 
-OpenRouter 与 X/Twitter 第三方服务的可用性、配额或费用由各自服务商决定。请勿将真实密钥提交到 GitHub；`.env` 已被 `.gitignore` 排除。
+> 🔐 请勿将真实密钥提交到 GitHub。`.env` 已被 `.gitignore` 排除；OpenRouter 与 X/Twitter 的可用性、配额或费用由服务商决定。
 
-## Agent Skill（可选）
+## 🤖 Agent Skill（可选）
 
-`skills/hotpulse/` 下的 CLI 版 Skill 与 Web 服务相互独立，不需要启动 Express 服务，也不需要 OpenRouter API Key。需要 Node.js 24 或更高版本。在项目根目录执行：
+CLI Skill 与 Web 服务相互独立，无需启动后端或配置 OpenRouter API Key。需要 Node.js 24 或更高版本。在项目根目录执行：
 
 ```powershell
 node skills/hotpulse/scripts/hp.mjs doctor
@@ -133,22 +137,22 @@ node skills/hotpulse/scripts/hp.mjs pending
 node skills/hotpulse/scripts/hp.mjs digest --hours 72
 ```
 
-首次使用建议运行 `doctor` 检查信息源连通性。该 Skill 的数据保存在 `skills/hotpulse/data/agent.db`，与 Web 版数据库隔离。更多命令与 AI 甄别流程见 [skills/hotpulse/SKILL.md](skills/hotpulse/SKILL.md)。
+首次使用建议运行 `doctor` 检查信息源连通性。Skill 数据保存在 `skills/hotpulse/data/agent.db`，与 Web 版数据库隔离。更多用法见 [SKILL.md](skills/hotpulse/SKILL.md)。
 
-## 测试
+## 🧪 测试
 
-运行服务端默认测试：
+运行默认服务端测试：
 
 ```powershell
 npm test
 ```
 
-## 文档
+## 📚 文档
 
 - [需求文档](docs/REQUIREMENTS.md)
 - [技术设计](docs/DESIGN.md)
 - [Agent Skill 使用说明](skills/hotpulse/SKILL.md)
 
-## 许可证
+## 📄 许可证
 
-当前仓库尚未声明开源许可证。若计划公开分发或允许他人复用，请先添加适合项目的 LICENSE 文件。
+当前仓库尚未声明开源许可证。如计划公开分发或允许他人复用，请先添加 LICENSE 文件。
