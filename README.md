@@ -4,6 +4,45 @@
 
 HotPulse 是一个本地优先的热点监控工具：从多个公开来源收集内容，通过规则过滤与去重，再按需使用 AI 甄别关键词命中、聚类热点并生成中文摘要。你可以在 Web 界面管理监控项、浏览热点和接收实时通知。
 
+## 🖥️ 界面预览
+
+![热点雷达与实时热点流](docs/images/radar.png)
+
+| 关键词盯梢 | 系统设置 |
+| --- | --- |
+| ![关键词盯梢与命中记录](docs/images/watch.png) | ![扫描、AI 与质量门槛设置](docs/images/settings.png) |
+
+## 🏗️ 架构与数据链路
+
+```mermaid
+flowchart LR
+    ui["React + Vite<br/>Web 界面"]
+    api["Express<br/>REST API · SSE"]
+    scheduler["node-cron<br/>定时 / 手动扫描"]
+    pipeline["扫描流水线"]
+    sources["公开信息源<br/>HN · GitHub · Hugging Face · RSS · 新闻 · B站"]
+    collectors["多源采集器"]
+    quality["质量闸门<br/>硬门槛 · 质量评分 · 去重"]
+    db[("SQLite<br/>条目 · 命中 · 话题 · 通知")]
+    ai["AI 甄别与热点聚类<br/>可选"]
+    openrouter["OpenRouter<br/>可选"]
+    notify["通知编排"]
+    channels["SSE · Web Push · 邮件"]
+
+    ui -->|"REST 请求 / 订阅 SSE"| api
+    api -->|"查询与写入"| db
+    api -->|"手动触发"| scheduler
+    scheduler --> pipeline
+    sources --> collectors --> pipeline --> quality --> db
+    db --> ai
+    ai --> db
+    ai <--> openrouter
+    pipeline --> notify
+    notify --> db
+    notify --> api
+    notify --> channels --> ui
+```
+
 ## ✨ 功能
 
 - 🔎 **关键词盯梢**：跟踪 GPT、Claude、DeepSeek 等关键词，查看甄别结果与原因。
@@ -42,7 +81,7 @@ HotPulse 是一个本地优先的热点监控工具：从多个公开来源收�
 │       ├── components/     # 页面组件
 │       └── lib/            # API 与通用工具
 ├── skills/hotpulse/        # 独立 Agent Skill 与 CLI
-├── docs/                   # 需求与设计文档
+├── docs/                   # 需求、设计文档与界面截图
 ├── .env.example            # 环境变量模板
 └── package.json            # npm workspaces 与常用命令
 ```
@@ -155,4 +194,4 @@ npm test
 
 ## 📄 许可证
 
-当前仓库尚未声明开源许可证。如计划公开分发或允许他人复用，请先添加 LICENSE 文件。
+项目采用 [MIT License](LICENSE)。
